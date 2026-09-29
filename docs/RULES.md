@@ -12,7 +12,7 @@ Valores em centavos inteiros; créditos fictícios. Constantes em `packages/engi
 | 23+1, Ás | Ás alto e baixo, mas só **A-2-3** e **Q-K-A** (K-A-2 não vale). |
 | Pares | Precisa ser o mesmo rank (QQ). Perfect = mesmo naipe; Coloured = mesma cor, naipes diferentes; Red/Black = cores diferentes. Q-K não é par. |
 
-## Suposições feitas (pendentes de confirmação)
+## Suposições feitas (confirmadas pelo dono da mesa)
 - Surrender "já devolve": interpretado como devolução de **metade** da aposta.
 - Dealer com 10 aberto e Ás fechado também conta como blackjack no confronto final (sem peek, é 21 em duas cartas). Insurance só é oferecido com Ás aberto.
 - Split permitido para qualquer par de **mesmo valor** (ex.: K+10). `RULES.splitBy = 'rank'` restringe a mesmo rank.
