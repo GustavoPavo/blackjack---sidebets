@@ -2,12 +2,19 @@
   "name": "blackjack-sidebets",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @bj/server\" \"npm run dev -w @bj/web\"",
+    "build": "npm run build -w @bj/web",
+    "start": "npm run build && npm run start -w @bj/server",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
+    "concurrently": "^10.0.5",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }
