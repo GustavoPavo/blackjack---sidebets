@@ -3,3 +3,7 @@ export * from './cards';
 export * from './shoe';
 export * from './hand';
 export * from './busterLucky';
+export * from './sideBets';
+export * from './types';
+export * from './table';
+export * from './view';
