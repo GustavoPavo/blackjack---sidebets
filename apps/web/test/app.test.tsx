@@ -1,10 +1,14 @@
+/// <reference types="node" />
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Table, Shoe, toView, type Command } from '@bj/engine';
 import { App } from '../src/App';
 import { ANIMATION } from '../src/usePresentation';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
+const css = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
 const card = (code: string) => ({ rank: code.slice(0, -1) as any, suit: code.slice(-1) as any });
 let table: Table;
 let n = 0;
@@ -244,5 +248,80 @@ describe('mensagem de ganho total', () => {
     render(<App />);
     await user.click(await screen.findByText('Parar (Stand)'));
     expect((await screen.findByRole('status')).textContent).toContain('Rodada empatada');
+  });
+});
+
+describe('design da mesa', () => {
+  it('cinco lugares e o dealer ficam dentro da mesa (borda de madeira + feltro)', async () => {
+    startServer();
+    setIdentity('ana', 'Ana');
+    const { container } = render(<App />);
+    await screen.findAllByText('Lugar disponível');
+    const rim = container.querySelector('.table-surface > .table-rim')!;
+    expect(rim).toBeTruthy();
+    expect(rim.querySelector('[aria-label="Dealer"]')).toBeTruthy();
+    expect(rim.querySelectorAll('.seats .seat')).toHaveLength(5);
+    expect(rim.textContent).toContain('BLACKJACK PAGA 3:2');
+  });
+
+  it('fichas circulares: uma para cada valor, todas com cores diferentes', async () => {
+    startServer();
+    setIdentity('ana', 'Ana');
+    render(<App />);
+    await screen.findByRole('radio', { name: 'Ficha R$ 2,50' });
+    const names = screen.getAllByRole('radio').map((r) => r.getAttribute('aria-label'));
+    expect(names).toEqual(['Ficha R$ 2,50', 'Ficha R$ 5,00', 'Ficha R$ 10,00', 'Ficha R$ 25,00', 'Ficha R$ 50,00', 'Ficha R$ 100,00']);
+    const colors = [250, 500, 1000, 2500, 5000, 10000].map((v) => {
+      const m = css.match(new RegExp(`\\.chip-${v}\\s*\\{\\s*--chip-color:\\s*(#[0-9a-fA-F]{3,8})`));
+      expect(m, `cor da ficha ${v}`).not.toBeNull();
+      return m![1]!.toLowerCase();
+    });
+    expect(new Set(colors).size).toBe(6);
+    expect(css).toMatch(/\.chip\s*\{[^}]*border-radius:\s*50%/); // circulares
+  });
+
+  it('"Regras e pagamentos" abre o guia com as três side bets e fecha (botão ou Esc)', async () => {
+    startServer();
+    setIdentity('ana', 'Ana');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByText(/Regras e pagamentos/));
+    const dialog = screen.getByRole('dialog', { name: 'Regras e pagamentos' });
+    for (const t of ['23+1', 'Pares', 'Buster Lucky']) expect(within(dialog).getByText(t)).toBeTruthy();
+    expect(within(dialog).getAllByText('100:1').length).toBeGreaterThan(0); // Suited Trips (e Buster 7 cartas)
+    expect(within(dialog).getByText('200:1')).toBeTruthy(); // Buster 8+
+    expect(within(dialog).getByText('25:1')).toBeTruthy(); // Perfect Pair
+    expect(dialog.textContent).toMatch(/A-2-3 e Q-K-A/);
+    expect(dialog.textContent).toMatch(/mesmo rank/);
+    await user.click(within(dialog).getByLabelText('Fechar regras'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await user.click(screen.getByText(/Regras e pagamentos/));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('distribuição animada começa pelos jogadores: dealer só recebe depois da 1ª carta dos lugares', async () => {
+    startServer(['10S', '10H', '10D', '9C', '8C', '7C']); // lugares 1 e 2 apostando
+    Object.assign(ANIMATION, { firstMs: 80, stepMs: 250, holdMs: 80 });
+    setIdentity('ana', 'Ana');
+    seedAna();
+    srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
+    srv({ type: 'takeSeat', playerId: 'ana', seat: 1 });
+    for (const s of [0, 1]) {
+      srv({ type: 'setBet', playerId: 'ana', seat: s, kind: 'main', amount: 500 });
+      srv({ type: 'confirmBets', playerId: 'ana', seat: s });
+    }
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await user.click(await screen.findByText('Distribuir'));
+    const shown = (sel: string) => container.querySelectorAll(`${sel} .card.deal-in`).length;
+    await waitFor(() => expect(shown('[data-seat="1"]')).toBe(1));
+    expect(shown('[aria-label="Dealer"]')).toBe(0);
+    expect(shown('[data-seat="2"]')).toBe(0); // lugar 1 recebe primeiro, depois o 2
+    await waitFor(() => expect(shown('[data-seat="2"]')).toBe(1));
+    expect(shown('[aria-label="Dealer"]')).toBe(0);
+    await waitFor(() => expect(shown('[aria-label="Dealer"]')).toBe(1)); // 1ª carta do dealer só depois dos lugares
+    expect(shown('[data-seat="1"]')).toBe(1);
+    await waitFor(() => expect(shown('[data-seat="1"]')).toBe(2));
   });
 });

@@ -7,6 +7,7 @@ import { loadIdentity, newPlayerId, saveIdentity, type Identity } from './identi
 import { visualColumn } from './layout';
 import { NameForm } from './NameForm';
 import { RoundMessage } from './RoundMessage';
+import { RulesModal } from './RulesModal';
 import { SeatPanel } from './SeatPanel';
 import { usePresentation } from './usePresentation';
 
@@ -26,6 +27,7 @@ export function App() {
   const [chip, setChip] = useState(500);
   const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<'name' | 'buyin' | 'rebuy' | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const pres = usePresentation(table);
   const presRef = useRef(pres);
   presRef.current = pres;
@@ -106,7 +108,10 @@ export function App() {
   return (
     <main className="app">
       <header className="top">
-        <h1>Blackjack</h1>
+        <div className="brand">
+          <div><span className="eyebrow">MESA PRIVADA · CRÉDITOS FICTÍCIOS</span><h1>Blackjack <span>Club</span></h1></div>
+          <button className="rules-trigger ghost" onClick={() => setRulesOpen(true)}>Regras e pagamentos ↗</button>
+        </div>
         <p className="banner">
           <strong>Simulação local</strong> — mesa de 5 lugares neste servidor. Não é multiplayer online.
           Créditos fictícios, sem depósito, saque ou dinheiro real.
@@ -148,20 +153,39 @@ export function App() {
         )}
       </section>
 
-      <section className="dealer" aria-label="Dealer">
-        <h2>Dealer</h2>
-        <div className="cards">
-          {table.dealer.cards.map((c, i) => (
-            <CardView key={`${table.dealer.cardSeq[i]}-${i === 1 && pres.holeUp}`} card={c}
-              hidden={table.dealer.cardSeq[i]! > pres.shownSeq}
-              faceDown={i === 1 && !pres.holeUp} />
-          ))}
+      <div className="table-surface">
+        <div className="table-rim">
+          <section className="dealer" aria-label="Dealer">
+            <h2>Dealer</h2>
+            <div className="cards">
+              {table.dealer.cards.map((c, i) => (
+                <CardView key={`${table.dealer.cardSeq[i]}-${i === 1 && pres.holeUp}`} card={c}
+                  hidden={table.dealer.cardSeq[i]! > pres.shownSeq}
+                  faceDown={i === 1 && !pres.holeUp} />
+              ))}
+            </div>
+            {table.dealer.value && !pres.presenting && (
+              <div className="meta"><b>{table.dealer.value.total}{table.dealer.value.soft ? ' (soft)' : ''}</b>{table.dealer.hasBlackjack ? ' · Blackjack' : ''}</div>
+            )}
+          </section>
+
+          <div className="table-mark"><span>BLACKJACK PAGA 3:2</span><small>DEALER PARA NO SOFT 17 · INSURANCE PAGA 2:1</small></div>
+
+          {/* Visão do jogador: lugar 1 à direita … lugar 5 à esquerda (colunas da grade). */}
+          <div className="seats">
+            {table.seats.map((s) => (
+              <div key={s.index} className="seatslot" style={{ gridColumn: visualColumn(s.index), gridRow: 1, order: visualColumn(s.index) }} data-seat-slot={s.number}>
+                <SeatPanel seat={s} table={table} chip={chip} pres={pres} busy={busy} hasWallet={hasWallet}
+                  onBet={(seat: number, kind: BetKind, amount: number) => cmd({ type: 'setBet', seat, kind, amount })}
+                  onCmd={cmd} />
+              </div>
+            ))}
+          </div>
+
         </div>
-        {table.dealer.value && !pres.presenting && (
-          <div className="meta"><b>{table.dealer.value.total}{table.dealer.value.soft ? ' (soft)' : ''}</b>{table.dealer.hasBlackjack ? ' · Blackjack' : ''}</div>
-        )}
-        <div className="phase">Rodada {table.round} · {PHASE_LABEL[table.phase]}</div>
-      </section>
+      </div>
+
+      <div className="phase-line">Rodada {table.round} · {pres.presenting && table.phase !== 'BETTING' ? (table.phase === 'SETTLEMENT' ? 'Turno do dealer' : 'Distribuindo cartas…') : PHASE_LABEL[table.phase]}</div>
 
       {error && <div className="error" role="alert">{error}</div>}
 
@@ -172,14 +196,14 @@ export function App() {
           <>
             <div className="chips" role="radiogroup" aria-label="Fichas">
               {CHIPS.map((v) => (
-                <button key={v} role="radio" aria-checked={chip === v} className={`chip ${chip === v ? 'sel' : ''}`} onClick={() => setChip(v)}>{formatBRL(v)}</button>
+                <button key={v} role="radio" aria-checked={chip === v} aria-label={`Ficha ${formatBRL(v)}`} className={`chip chip-${v} ${chip === v ? 'sel' : ''}`} onClick={() => setChip(v)}><span>{formatBRL(v)}</span></button>
               ))}
             </div>
             <button className="primary" disabled={!table.canDeal || busy || pres.presenting} onClick={() => cmd({ type: 'deal' })}>Distribuir</button>
             {!table.canDeal && <small>Confirme as apostas de todos os lugares com aposta (mín. principal {formatBRL(table.rules.minMain)}, side bets {formatBRL(table.rules.minSide)}).</small>}
           </>
         )}
-        {pres.presenting && table.phase !== 'BETTING' && <div className="turnline">{table.phase === 'SETTLEMENT' ? 'Dealer jogando…' : 'Distribuindo…'}</div>}
+        {pres.presenting && table.phase !== 'BETTING' && <div className="dealing-message" aria-live="polite">{table.phase === 'SETTLEMENT' ? 'Dealer jogando…' : 'Distribuindo…'}</div>}
         {!pres.presenting && table.phase === 'PLAYER_TURNS' && turnSeat && (
           <>
             <div className="turnline">Vez de <b>{turnSeat.playerName}</b> (lugar {turnSeat.number}){turnSeat.hands.length > 1 ? ` · mão ${table.turn!.hand + 1}` : ''}</div>
@@ -200,22 +224,12 @@ export function App() {
         )}
       </section>
 
-      {/* Visão do jogador: lugar 1 à direita … lugar 5 à esquerda (colunas da grade). */}
-      <div className="seats">
-        {table.seats.map((s) => (
-          <div key={s.index} className="seatslot" style={{ gridColumn: visualColumn(s.index), gridRow: 1 }} data-seat-slot={s.number}>
-            <SeatPanel seat={s} table={table} chip={chip} pres={pres} busy={busy} hasWallet={hasWallet}
-              onBet={(seat: number, kind: BetKind, amount: number) => cmd({ type: 'setBet', seat, kind, amount })}
-              onCmd={cmd} />
-          </div>
-        ))}
-      </div>
-
       <details className="log">
         <summary>Registro da mesa</summary>
         <ol>{table.log.map((l, i) => <li key={i}>{l}</li>)}</ol>
         <button className="ghost" onClick={async () => setTable(await resetTable(identity.id))}>Reiniciar simulação</button>
       </details>
+      {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
     </main>
   );
 }

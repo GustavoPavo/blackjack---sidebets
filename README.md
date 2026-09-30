@@ -13,6 +13,9 @@ Mesa de Blackjack com 5 lugares e dealer compartilhado. **Somente créditos fict
 - **Mão** (hand): mão jogada num lugar (1, ou até 4 após splits).
 - **Jogador** (player): a pessoa, com id estável e **uma carteira**. Um jogador pode ocupar vários lugares.
 
+## Visual
+Mesa com borda de madeira, contorno dourado e feltro; dealer no topo e os cinco lugares dentro da mesa em semicírculo (esquerda → direita: 5, 4, 3, 2, 1); fichas circulares, uma cor por valor; botão **Regras e pagamentos** (tabelas das side bets 23+1, Pares e Buster Lucky e regras da mesa). O estilo está em `apps/web/src/styles.css`.
+
 ## Como usar
 1. Informe seu nome (só na primeira visita; "Editar nome" no topo altera o nome em todos os seus lugares sem mudar sua carteira).
 2. Faça o **buy-in inicial** no topo (máx. R$ 1.000,00 por operação; depois, **Rebuy** entre rodadas, antes de confirmar apostas).
