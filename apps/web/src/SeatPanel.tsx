@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import { formatBRL, type BetKind, type SeatView, type TableView } from '@bj/engine';
 import { CardView } from './CardView';
+import type { Presentation } from './usePresentation';
 
-const BET_LABEL: Record<BetKind, string> = {
+export const BET_LABEL: Record<BetKind, string> = {
   main: 'Principal', twentyThree: '23+1', pairs: 'Pares', buster: 'Buster Lucky',
 };
 const STATUS_LABEL: Record<string, string> = {
@@ -16,80 +16,61 @@ interface Props {
   seat: SeatView;
   table: TableView;
   chip: number;
+  pres: Presentation;
+  busy: boolean;
+  hasWallet: boolean;
   onBet: (seat: number, kind: BetKind, amount: number) => void;
   onCmd: (intent: any) => void;
 }
 
-function AmountForm({ max, label, onSubmit, onCancel, withName }: {
-  max: number; label: string; withName?: boolean; onCancel: () => void;
-  onSubmit: (cents: number, name?: string) => void;
-}) {
-  const [text, setText] = useState('1000');
-  const [name, setName] = useState('');
-  const reais = Number(text.replace(',', '.'));
-  const cents = Math.round(reais * 100);
-  const invalid = !Number.isFinite(reais) || cents <= 0 ? 'Informe um valor positivo.' : cents > max ? `Máximo ${formatBRL(max)} por operação.` : '';
-  return (
-    <form className="amount-form" onSubmit={(e) => { e.preventDefault(); if (!invalid) onSubmit(cents, name); }}>
-      {withName && <input aria-label="Nome" placeholder="Nome (opcional)" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} />}
-      <label>
-        Valor (R$)
-        <input aria-label="Valor em reais" inputMode="decimal" value={text} onChange={(e) => setText(e.target.value)} />
-      </label>
-      {invalid && <small className="err" role="alert">{invalid}</small>}
-      <div className="row">
-        <button type="submit" disabled={!!invalid}>{label}</button>
-        <button type="button" className="ghost" onClick={onCancel}>Cancelar</button>
-      </div>
-    </form>
-  );
-}
+const total = (b: Record<BetKind, number>) => b.main + b.twentyThree + b.pairs + b.buster;
 
-export function SeatPanel({ seat, table, chip, onBet, onCmd }: Props) {
-  const [form, setForm] = useState<'buyin' | 'rebuy' | null>(null);
+/** Um LUGAR da mesa: mostra o ocupante, suas apostas e mãos. Não há carteira nem buy-in aqui. */
+export function SeatPanel({ seat, table, chip, pres, busy, hasWallet, onBet, onCmd }: Props) {
   const betting = table.phase === 'BETTING';
   const isTurnSeat = table.turn?.seat === seat.index;
-  const n = seat.index + 1;
+  const n = seat.number;
+  const showOutcome = !pres.presenting; // totais e resultados só depois da animação
 
-  if (!seat.player) {
+  if (!seat.playerId) {
     return (
-      <section className="seat empty" aria-label={`Lugar ${n}`}>
+      <section className="seat empty" data-seat={n} aria-label={`Lugar ${n}`}>
         <h3>Lugar {n}</h3>
         <p className="avail">Lugar disponível</p>
-        {seat.canBuyIn && form !== 'buyin' && <button onClick={() => setForm('buyin')}>Sentar (buy-in)</button>}
-        {seat.canBuyIn && form === 'buyin' && (
-          <AmountForm withName max={table.rules.maxBuy} label="Confirmar buy-in" onCancel={() => setForm(null)}
-            onSubmit={(amount, name) => { onCmd({ type: 'buyIn', seat: seat.index, amount, name }); setForm(null); }} />
-        )}
-        {!seat.canBuyIn && <small>Buy-in disponível entre rodadas.</small>}
+        {seat.canTake && <button disabled={busy} onClick={() => onCmd({ type: 'takeSeat', seat: seat.index })}>Sentar aqui</button>}
+        {!seat.canTake && betting && <small>{hasWallet ? 'Indisponível agora.' : 'Faça o buy-in inicial (no topo) para sentar.'}</small>}
+        {!betting && <small>Disponível entre rodadas.</small>}
       </section>
     );
   }
 
   return (
-    <section className={`seat ${isTurnSeat ? 'turn' : ''}`} aria-label={`Lugar ${n}`}>
+    <section className={`seat ${isTurnSeat ? 'turn' : ''} ${seat.mine ? 'mine' : ''}`} data-seat={n} aria-label={`Lugar ${n}`}>
       <header>
-        <h3>{seat.player} <small>(lugar {n})</small></h3>
-        <div className="balance" aria-label={`Saldo do lugar ${n}`}>{formatBRL(seat.balance)}</div>
+        <h3>{seat.playerName} <small>(lugar {n}{seat.mine ? ' · você' : ''})</small></h3>
       </header>
 
       <div className="hands">
         {seat.hands.length === 0 && <span className="muted">Sem cartas</span>}
         {seat.hands.map((h, i) => (
-          <div key={i} className={`hand ${h.active ? 'active' : ''} ${h.status}`}>
-            <div className="cards">{h.cards.map((c, j) => <CardView key={j} card={c} />)}</div>
-            <div className="meta">
-              <b>{h.value.total}{h.value.soft ? ' (soft)' : ''}</b> · {formatBRL(h.bet)}
-              {STATUS_LABEL[h.status] && <em> {STATUS_LABEL[h.status]}</em>}
-              {h.doubled && <em> Double</em>}
+          <div key={i} className={`hand ${h.active && !pres.presenting ? 'active' : ''} ${showOutcome ? h.status : ''}`} aria-label={`Mão ${i + 1} do lugar ${n}`}>
+            <div className="cards">
+              {h.cards.map((c, j) => <CardView key={h.cardSeq[j]} card={c} hidden={h.cardSeq[j]! > pres.shownSeq} />)}
             </div>
+            {showOutcome && (
+              <div className="meta">
+                <b>{h.value.total}{h.value.soft ? ' (soft)' : ''}</b> · {formatBRL(h.bet)}
+                {STATUS_LABEL[h.status] && <em> {STATUS_LABEL[h.status]}</em>}
+                {h.doubled && <em> Double</em>}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
       <div className="bets">
         {(['main', 'twentyThree', 'pairs', 'buster'] as BetKind[]).map((k) => {
-          const blocked = !seat.canEditBets || (k !== 'main' && seat.bets.main <= 0);
+          const blocked = busy || !seat.canEditBets || (k !== 'main' && seat.bets.main <= 0);
           return (
             <div key={k} className={`bet ${k}`}>
               <button
@@ -102,36 +83,37 @@ export function SeatPanel({ seat, table, chip, onBet, onCmd }: Props) {
                 <b>{formatBRL(seat.bets[k])}</b>
               </button>
               {seat.bets[k] > 0 && seat.canEditBets && (
-                <button className="x" aria-label={`Remover aposta ${BET_LABEL[k]}`} onClick={() => onBet(seat.index, k, 0)}>✕</button>
+                <button className="x" disabled={busy} aria-label={`Remover aposta ${BET_LABEL[k]} do lugar ${n}`} onClick={() => onBet(seat.index, k, 0)}>✕</button>
               )}
             </div>
           );
         })}
       </div>
 
-      {betting && (
+      {betting && seat.mine && (
         <div className="row wrap">
-          {seat.canEditBets && <button className="ghost" onClick={() => onCmd({ type: 'clearBets', seat: seat.index })}>Limpar</button>}
-          {seat.canConfirm && <button onClick={() => onCmd({ type: 'confirmBets', seat: seat.index })}>Confirmar apostas</button>}
-          {seat.confirmed && <><span className="ok">Apostas confirmadas</span><button className="ghost" onClick={() => onCmd({ type: 'editBets', seat: seat.index })}>Editar</button></>}
-          {seat.canRebuy && form !== 'rebuy' && <button className="ghost" onClick={() => setForm('rebuy')}>Rebuy</button>}
-          {seat.canEditBets && <button className="ghost" onClick={() => onCmd({ type: 'leave', seat: seat.index })}>Sair do lugar</button>}
+          {seat.canRepeat && seat.lastBets && (
+            <>
+              <button disabled={busy} title={`Repor ${formatBRL(total(seat.lastBets))}`} onClick={() => onCmd({ type: 'repeatBets', seat: seat.index, multiplier: 1 })}>Repetir aposta</button>
+              <button disabled={busy} title={`Repor ${formatBRL(total(seat.lastBets) * 2)}`} onClick={() => onCmd({ type: 'repeatBets', seat: seat.index, multiplier: 2 })}>X2</button>
+            </>
+          )}
+          {seat.canEditBets && <button className="ghost" disabled={busy} onClick={() => onCmd({ type: 'clearBets', seat: seat.index })}>Limpar</button>}
+          {seat.canConfirm && <button disabled={busy} onClick={() => onCmd({ type: 'confirmBets', seat: seat.index })}>Confirmar apostas</button>}
+          {seat.confirmed && <><span className="ok">Apostas confirmadas</span><button className="ghost" disabled={busy} onClick={() => onCmd({ type: 'editBets', seat: seat.index })}>Editar</button></>}
+          {seat.canLeave && <button className="ghost" disabled={busy} onClick={() => onCmd({ type: 'leave', seat: seat.index })}>Sair do lugar</button>}
         </div>
       )}
-      {form === 'rebuy' && seat.canRebuy && (
-        <AmountForm max={table.rules.maxBuy} label="Confirmar rebuy" onCancel={() => setForm(null)}
-          onSubmit={(amount) => { onCmd({ type: 'rebuy', seat: seat.index, amount }); setForm(null); }} />
-      )}
 
-      {table.phase === 'INSURANCE' && seat.insurance.decision === 'pending' && (
+      {table.phase === 'INSURANCE' && seat.mine && seat.insurance.decision === 'pending' && !pres.presenting && (
         <div className="row wrap">
-          <button onClick={() => onCmd({ type: 'insurance', seat: seat.index, take: true })}>Insurance {formatBRL(seat.bets.main / 2)}</button>
-          <button className="ghost" onClick={() => onCmd({ type: 'insurance', seat: seat.index, take: false })}>Recusar</button>
+          <button disabled={busy} onClick={() => onCmd({ type: 'insurance', seat: seat.index, take: true })}>Insurance {formatBRL(seat.bets.main / 2)}</button>
+          <button className="ghost" disabled={busy} onClick={() => onCmd({ type: 'insurance', seat: seat.index, take: false })}>Recusar</button>
         </div>
       )}
       {seat.insurance.amount > 0 && <small>Insurance: {formatBRL(seat.insurance.amount)}</small>}
 
-      {seat.results.length > 0 && (
+      {showOutcome && seat.results.length > 0 && (
         <ul className="results" aria-label={`Resultados do lugar ${n}`}>
           {seat.results.map((r, i) => (
             <li key={i} className={r.net > 0 ? 'pos' : r.net < 0 ? 'neg' : ''}>
@@ -140,17 +122,6 @@ export function SeatPanel({ seat, table, chip, onBet, onCmd }: Props) {
           ))}
         </ul>
       )}
-
-      <details className="ledger">
-        <summary>Histórico de créditos ({seat.ledger.length})</summary>
-        <ul>
-          {seat.ledger.map((l) => (
-            <li key={l.commandId}>
-              {l.type === 'buyIn' ? 'Buy-in' : 'Rebuy'} +{formatBRL(l.amount)} · {new Date(l.at).toLocaleTimeString('pt-BR')} · saldo {formatBRL(l.balanceAfter)}
-            </li>
-          ))}
-        </ul>
-      </details>
     </section>
   );
 }

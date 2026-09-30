@@ -33,3 +33,8 @@ ou de estado errado são rejeitadas sem alterar saldo. Tudo em centavos inteiros
 
 `money`, `cards`, `shoe` (6 baralhos, RNG injetável), `handValue` (Ás 1/11, soft),
 `Buster Lucky` (tabela e liquidação) + testes.
+
+## v2: jogador, carteira e apresentação
+- `Table.players` (id estável → nome, carteira, histórico). `Seat.playerId` aponta para o dono; não há saldo por lugar.
+- `toView(table, playerId)` monta a visão do jogador (`me`, `mine`, `canRepeat`, `roundSummary`...). Cada carta tem `seq` (ordem global de saque).
+- O servidor resolve a rodada de uma vez; o cliente (`apps/web/src/reveal.ts`, `usePresentation.ts`) só decide *quando* mostrar cada carta pela ordem de `seq`, escondendo totais, resultados, saldo atualizado e a mensagem final até a animação terminar.
