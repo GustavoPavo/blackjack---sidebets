@@ -146,12 +146,11 @@ describe('dealer', () => {
     expect(h.t.dealer.cards).toHaveLength(3);
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'win', label: 'Dealer estourou', payout: 1000 });
   });
-  it('dealer com blackjack (sem peek): perde tudo, inclusive Double e Split', () => {
-    // seat0: 5+6=11, dealer A up / K hole. Double → 10 => 21? use 4: 5,6,+4 = 15
-    const h = mkTable(['5S', 'AD', '6H', 'KC', '4D']);
+  it('dealer com blackjack com 10 aberto (sem peek): perde tudo, inclusive Double e Split', () => {
+    // seat0: 5+6=11, dealer K up / A hole (sem peek com 10 aberto). Double +4 = 15
+    const h = mkTable(['5S', 'KD', '6H', 'AC', '4D']);
     sit(h, 0, 5000, { main: 1000 });
     h.ok({ type: 'deal' });
-    h.ok({ type: 'insurance', seat: 0, take: false });
     act(h, 0, 'double');
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'lose', stake: 2000, payout: 0 });
     expect(h.bal(0)).toBe(3000);
@@ -260,10 +259,9 @@ describe('surrender', () => {
     expect(s.t.legalActions()).not.toContain('surrender');
   });
   it('early: devolve metade mesmo que o dealer tenha blackjack', () => {
-    const h = mkTable(['10S', 'AD', '6H', 'KC']);
+    const h = mkTable(['10S', 'KD', '6H', 'AC']);
     sit(h, 0, 5000, { main: 1000 });
     h.ok({ type: 'deal' });
-    h.ok({ type: 'insurance', seat: 0, take: false });
     act(h, 0, 'surrender');
     expect(h.bal(0)).toBe(4500);
     expect(h.t.seats[0]!.results.filter((r) => r.kind === 'main')).toHaveLength(1);
@@ -284,8 +282,8 @@ describe('insurance', () => {
     expect(h.t.phase).toBe('INSURANCE');
     h.ok({ type: 'insurance', seat: 0, take: true });
     expect(h.t.seats[0]!.insurance).toBe(500);
-    expect(h.bal(0)).toBe(3500);
-    act(h, 0, 'stand');
+    // dealer A+K: após a decisão o blackjack é conferido e a rodada encerra sem turnos
+    expect(h.t.phase).toBe('SETTLEMENT');
     // principal perdida (16 vs BJ) ; insurance devolve 500 + 1000 = 1500
     expect(h.bal(0)).toBe(5000);
     expect(h.t.seats[0]!.results.find((r) => r.kind === 'insurance')).toMatchObject({ outcome: 'win', payout: 1500 });

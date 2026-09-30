@@ -8,7 +8,7 @@ as estatísticas nem o banco. Reiniciar o servidor descarta essas sessões (a me
 Algoritmo **determinístico** por **valor esperado (EV)**, calculado para as regras desta mesa:
 
 - 6 baralhos (aproximados por baralho **infinito**), dealer para no soft 17, blackjack 3:2;
-- mesa **sem peek**: Double e Split perdem tudo contra blackjack do dealer (já contado no EV);
+- **10 aberto**: sem peek, Double e Split perdem tudo contra blackjack do dealer (já contado no EV); **Ás aberto**: blackjack conferido antes dos turnos (carta fechada ≠ 10, EV condicionado);
 - Double em qualquer duas cartas, inclusive após split (exceto mãos de ases divididos);
 - Split até 3 vezes (4 mãos), re-split de ases (uma carta por mão de ases);
 - **Surrender antecipado**, só como primeira decisão da mão original (perde metade);

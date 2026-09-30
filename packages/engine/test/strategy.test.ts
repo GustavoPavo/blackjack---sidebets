@@ -12,6 +12,8 @@ const rec = (cards: string[], up: string, legal: Action[] = ALL, splitsLeft = 3)
 function lcg(seed: number) { let x = seed; return () => (x = (x * 1664525 + 1013904223) % 4294967296) / 4294967296; }
 /** Carta aleatória de baralho infinito (valor 2..11). */
 const draw = (r: () => number) => { const k = Math.floor(r() * 13); return k < 8 ? k + 2 : k < 12 ? 10 : 11; };
+/** Carta fechada do dealer: com Ás aberto a mesa já conferiu o blackjack, então ela nunca vale 10. */
+const drawHole = (r: () => number, up: number) => { let v = draw(r); while (up === 11 && v === 10) v = draw(r); return v; };
 
 describe('distribuição do dealer (baralho infinito, para no soft 17)', () => {
   it('soma 1 e bate com valores de referência conhecidos', () => {
@@ -24,10 +26,10 @@ describe('distribuição do dealer (baralho infinito, para no soft 17)', () => {
     expect(bust(6)).toBeCloseTo(0.4232, 3);
     expect(bust(7)).toBeCloseTo(0.2623, 3);
     expect(bust(10)).toBeCloseTo(0.2121, 3);
-    expect(bust(11)).toBeCloseTo(0.1153, 3);
+    expect(bust(11)).toBeCloseTo(0.1665, 3); // Ás aberto, dado que a carta fechada não é 10 (blackjack conferido antes)
   });
-  it('blackjack do dealer: 4/13 com Ás, 1/13 com 10; impossível nas demais', () => {
-    expect(dealerDistribution(11).blackjack).toBeCloseTo(4 / 13, 10);
+  it('blackjack do dealer: 1/13 com 10 aberto (sem peek); 0 com Ás (já conferido) e nas demais', () => {
+    expect(dealerDistribution(11).blackjack).toBe(0);
     expect(dealerDistribution(10).blackjack).toBeCloseTo(1 / 13, 10);
     for (const u of [2, 3, 4, 5, 6, 7, 8, 9]) expect(dealerDistribution(u).blackjack).toBe(0);
   });
@@ -39,7 +41,7 @@ describe('distribuição do dealer (baralho infinito, para no soft 17)', () => {
       for (let i = 0; i < N; i++) {
         let total = up; let aces = up === 11 ? 1 : 0; let n = 1;
         const add = (v: number) => { total += v; if (v === 11) aces++; n++; while (total > 21 && aces > 0) { total -= 10; aces--; } };
-        add(draw(r));
+        add(drawHole(r, up));
         if (total === 21 && n === 2) { count.blackjack++; continue; }
         while (total < 17) add(draw(r));
         if (total > 21) count.bust++; else (count as any)[total]++;
@@ -54,7 +56,7 @@ describe('distribuição do dealer (baralho infinito, para no soft 17)', () => {
     function dealerFinal(up: number): { total: number; bj: boolean } {
       let total = up; let aces = up === 11 ? 1 : 0; let n = 1;
       const add = (v: number) => { total += v; if (v === 11) aces++; n++; while (total > 21 && aces > 0) { total -= 10; aces--; } };
-      add(draw(r));
+      add(drawHole(r, up));
       if (total === 21 && n === 2) return { total, bj: true };
       while (total < 17) add(draw(r));
       return { total, bj: false };
@@ -112,16 +114,16 @@ describe('decisões conhecidas nas regras desta mesa', () => {
     expect(act(['10', '10'], '6', [...ALL, 'split'])).toBe('stand');
     expect(act(['5', '5'], '6', [...ALL, 'split'])).not.toBe('split');
   });
-  it('mesa SEM peek: não dobra 11 contra 10 nem Ás; Ás-Ás contra Ás não divide', () => {
-    expect(act(['6', '5'], 'A')).toBe('hit');
+  it('sem peek com 10 aberto: não dobra 11 contra 10', () => {
     expect(act(['6', '5'], '10')).toBe('hit');
-    expect(act(['A', 'A'], 'A', [...ALL, 'split'])).not.toBe('split');
+  });
+  it('Ás aberto (blackjack já conferido): 11 contra Ás é Hit (dealer S17), como na estratégia básica', () => {
+    expect(act(['6', '5'], 'A')).toBe('hit');
+    expect(act(['A', 'A'], 'A', [...ALL, 'split'])).toBe('split');
   });
   it('Surrender antecipado (primeira decisão) quando o EV é pior que perder metade', () => {
     expect(act(['10', '6'], '10')).toBe('surrender');
     expect(act(['10', '5'], '10')).toBe('surrender');
-    expect(act(['10', '6'], 'A')).toBe('surrender');
-    expect(act(['10', '7'], 'A')).toBe('surrender');
     // sem Surrender disponível (ex.: depois de pedir carta) a mesma mão vira decisão apertada
     expect(act(['10', '6'], '10', ['hit', 'stand'])).toBeNull();
   });

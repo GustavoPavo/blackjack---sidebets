@@ -5,7 +5,8 @@ import { RULES } from './types';
 /**
  * Estratégia básica por VALOR ESPERADO (EV), calculada de forma determinística para as regras desta mesa:
  *  - dealer para no soft 17; blackjack do dealer vence qualquer mão que não seja blackjack natural;
- *  - mesa SEM peek: Double e Split perdem tudo contra blackjack do dealer (já contado no EV);
+ *  - 10 aberto: sem peek, Double e Split perdem tudo contra blackjack do dealer (já contado no EV);
+ *  - Ás aberto: blackjack do dealer conferido antes dos turnos (carta fechada ≠ 10);
  *  - Double em qualquer duas cartas, inclusive após split (exceto mãos de ases divididos);
  *  - Split até 3 vezes (4 mãos), com re-split de ases (cada mão de ases recebe uma só carta);
  *  - Surrender antecipado (early): só como primeira decisão da mão original, perde metade.
@@ -52,13 +53,21 @@ function dealerFrom(h: Hard, twoCards: boolean): DealerDist {
   return out;
 }
 
-/** Distribuição do resultado final do dealer dado o valor da carta aberta (2..11; Ás = 11). */
+/**
+ * Distribuição do resultado final do dealer dado o valor da carta aberta (2..11; Ás = 11).
+ * Com Ás aberto a mesa confere o blackjack do dealer (após o Insurance) ANTES dos turnos: quem decide
+ * já sabe que a carta fechada não é 10, então essa possibilidade é excluída e as demais renormalizadas.
+ * Com 10 aberto não há conferência (sem peek): o blackjack do dealer segue possível.
+ */
 export function dealerDistribution(upValue: number): DealerDist {
   const start: Hard = { hard: upValue === 11 ? 1 : upValue, ace: upValue === 11 };
   const out: DealerDist = { 17: 0, 18: 0, 19: 0, 20: 0, 21: 0, bust: 0, blackjack: 0 };
+  const peeked = upValue === 11;
+  const norm = peeked ? 1 - (DRAWS.find(([v]) => v === 10)?.[1] ?? 0) : 1;
   for (const [v, p] of DRAWS) {
-    const d = dealerFrom(add(start, v), true); // segunda carta (a fechada, sem peek)
-    for (const k of Object.keys(out) as (keyof DealerDist)[]) out[k] += p * d[k];
+    if (peeked && v === 10) continue;
+    const d = dealerFrom(add(start, v), true); // segunda carta (a fechada)
+    for (const k of Object.keys(out) as (keyof DealerDist)[]) out[k] += (p / norm) * d[k];
   }
   return out;
 }

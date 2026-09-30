@@ -212,9 +212,8 @@ describe('recuperação após reinício durante a rodada: RETOMA o estado salvo'
     s.close();
     s = boot(file);
     expect(s.service.view(playerId).seats[0]!.insurance.decision).toBe('pending');
-    ok(s.service, playerId, { type: 'insurance', seat: 0, take: true }); // 500
-    ok(s.service, playerId, { type: 'action', seat: 0, action: 'stand' });
-    // dealer A+K = blackjack: principal perde 1000; insurance devolve 500 + 1000
+    // dealer A+K = blackjack: conferido logo após a decisão, sem turnos
+    expect(ok(s.service, playerId, { type: 'insurance', seat: 0, take: true }).phase).toBe('SETTLEMENT'); // 500: principal perde 1000; insurance devolve 500 + 1000
     expect(s.service.view(playerId).me!.balance).toBe(100_000 - 1000 - 500 + 1500);
     s.close();
   });

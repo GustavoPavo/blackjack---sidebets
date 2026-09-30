@@ -96,7 +96,7 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
         </div>
         <p className="rules-note">
           Blackjack natural paga 3:2. Dealer para no soft 17. Insurance só é oferecido com Ás aberto, custa metade da aposta principal e paga 2:1.
-          A mesa não usa peek: se o dealer tiver blackjack, leva tudo o que foi apostado (inclusive Double e Split); blackjack do jogador empata.
+          Com Ás aberto, o dealer confere o blackjack após as decisões de Insurance e, se tiver, a rodada acaba sem jogadas. Com 10 aberto não há conferência: se o dealer tiver blackjack, leva tudo o que foi apostado (inclusive Double e Split). Blackjack do jogador empata.
           O jogo usa 6 baralhos e permite até 3 splits (4 mãos). Surrender só como primeira decisão e devolve metade da aposta.
           Todos os valores são créditos fictícios.
         </p>

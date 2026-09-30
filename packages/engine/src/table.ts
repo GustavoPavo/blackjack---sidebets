@@ -43,7 +43,7 @@ const MAX_NAME = 20;
  *
  * Liquidação (ver docs/RULES.md):
  *  - 23+1 e Pares: logo após a distribuição.
- *  - Insurance: quando o dealer revela a carta fechada (mesa sem "peek").
+ *  - Insurance: após a última decisão, o dealer confere o blackjack (com Ás aberto) antes dos turnos.
  *  - Buster Lucky e mãos principais: fim do turno do dealer.
  */
 export class Table {
@@ -349,9 +349,33 @@ export class Table {
     this.maybeStartTurns();
   }
 
+  /**
+   * Chamado após cada decisão de Insurance (e na entrada da fase). Quando todas estão decididas
+   * (aceitas, recusadas ou sem saldo), o dealer verifica o blackjack ANTES de qualquer turno:
+   *  - blackjack: revela a carta fechada e liquida a rodada, sem ações de jogadores;
+   *  - sem blackjack: Insurance perdido, carta fechada segue oculta e os turnos são liberados.
+   */
   private maybeStartTurns() {
     if (this.seats.some((s) => s.insuranceDecision === 'pending')) return;
+    const dealerBJ = this.dealer.cards.length === 2 && handValue(this.dealer.cards).total === 21;
+    if (dealerBJ) { this.dealerTurn(); return; }
+    this.settleInsurance(false);
     this.startTurns();
+  }
+
+  /** Liquida o Insurance de cada lugar uma única vez. */
+  private settleInsurance(dealerBJ: boolean) {
+    for (const s of this.seats) {
+      if (s.hands.length === 0 || s.insurance <= 0 || s.insuranceSettled) continue;
+      s.insuranceSettled = true;
+      if (dealerBJ) {
+        const payout = s.insurance * 3; // 2:1 + devolução
+        this.credit(s, payout);
+        this.record(s, { kind: 'insurance', stake: s.insurance, payout, outcome: 'win', label: 'Insurance paga 2:1' });
+      } else {
+        this.record(s, { kind: 'insurance', stake: s.insurance, payout: 0, outcome: 'lose', label: 'Dealer sem blackjack' });
+      }
+    }
   }
 
   private startTurns() {
@@ -478,17 +502,7 @@ export class Table {
     const dealerBJ = this.dealer.cards.length === 2 && dv0.total === 21;
     const inRound = this.seats.filter((s) => s.hands.length > 0);
 
-    for (const s of inRound) {
-      if (s.insurance > 0) {
-        if (dealerBJ) {
-          const payout = s.insurance * 3; // 2:1 + devolução
-          this.credit(s, payout);
-          this.record(s, { kind: 'insurance', stake: s.insurance, payout, outcome: 'win', label: 'Insurance paga 2:1' });
-        } else {
-          this.record(s, { kind: 'insurance', stake: s.insurance, payout: 0, outcome: 'lose', label: 'Dealer sem blackjack' });
-        }
-      }
-    }
+    this.settleInsurance(dealerBJ);
 
     const anyLive = inRound.some((s) => s.hands.some((h) => h.status === 'stood'));
     const anyBuster = inRound.some((s) => s.bets.buster > 0);
@@ -547,6 +561,7 @@ export class Table {
       s.confirmed = false;
       s.insurance = 0;
       s.insuranceDecision = null;
+      s.insuranceSettled = false;
       s.hands = [];
       s.splits = 0;
       s.results = [];
@@ -610,7 +625,7 @@ export class Table {
         continue;
       }
       for (const h of s.hands) if (h.status !== 'surrendered') { this.credit(s, h.bet); refunded += h.bet; }
-      if (s.insurance > 0) { this.credit(s, s.insurance); refunded += s.insurance; }
+      if (s.insurance > 0 && !s.insuranceSettled) { this.credit(s, s.insurance); refunded += s.insurance; }
       if (s.bets.buster > 0) { this.credit(s, s.bets.buster); refunded += s.bets.buster; }
     }
     this.say(`Rodada cancelada: ${formatBRL(refunded)} devolvidos.`);

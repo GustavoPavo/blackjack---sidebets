@@ -77,6 +77,8 @@ export interface Seat {
   confirmed: boolean;
   insurance: Cents;
   insuranceDecision: InsuranceDecision | null;
+  /** Insurance já liquidado (pago ou perdido): nunca liquidar/devolver duas vezes. */
+  insuranceSettled?: boolean;
   hands: Hand[];
   splits: number;
   results: BetResult[];

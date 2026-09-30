@@ -5,7 +5,7 @@ import { mkTable, sit, seatPlayer, bet, join } from './helpers';
 function lcg(seed: number) { let x = seed; return () => (x = (x * 1664525 + 1013904223) % 4294967296) / 4294967296; }
 const total = (t: Table) => [...t.players.values()].reduce((a, p) => a + p.balance, 0);
 const inPlay = (t: Table) => t.seats.reduce((a, s) => {
-  let n = s.bets.twentyThree + s.bets.pairs + s.bets.buster + s.bets.main * (s.hands.length ? 0 : 1) + s.insurance;
+  let n = s.bets.twentyThree + s.bets.pairs + s.bets.buster + s.bets.main * (s.hands.length ? 0 : 1) + (s.insuranceSettled ? 0 : s.insurance);
   for (const h of s.hands) n += h.bet; // principal em jogo (inclui Double/Split)
   return a + n;
 }, 0);
@@ -91,8 +91,8 @@ describe('abortRound: devolve exatamente o que não foi liquidado', () => {
     const refunded = h.t.abortRound();
     expect(h.t.phase).toBe('BETTING');
     expect(h.t.seats[0]!.hands).toHaveLength(0);
-    // principal: mão 1 dobrada (2000) + mão 2 (1000) ; insurance 500 ; buster 500
-    expect(refunded).toBe(2000 + 1000 + 500 + 500);
+    // principal: mão 1 dobrada (2000) + mão 2 (1000) ; buster 500. Insurance já foi liquidado (perdido) e não volta.
+    expect(refunded).toBe(2000 + 1000 + 500);
     expect(total(h.t)).toBe(t0 + settledNet);
   });
 
