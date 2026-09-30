@@ -1,12 +1,12 @@
 import { formatBRL, type PlayerRoundSummary } from '@bj/engine';
-import { BET_LABEL } from './SeatPanel';
+import { BET_LABEL } from './SeatControls';
 
 const signed = (n: number) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${formatBRL(Math.abs(n))}`;
 
 /** Mensagem destacada do resultado líquido total da rodada + detalhamento opcional por lugar e aposta. */
-export function RoundMessage({ summary }: { summary: PlayerRoundSummary }) {
+export function RoundMessage({ summary, floating }: { summary: PlayerRoundSummary; floating?: boolean }) {
   return (
-    <section className={`round-msg ${summary.message.kind}`} role="status" aria-live="polite">
+    <section className={`round-msg ${summary.message.kind} ${floating ? 'floating' : ''}`} role="status" aria-live="polite">
       <strong className="big">{summary.message.text}</strong>
       <details>
         <summary>Detalhes por lugar e aposta</summary>

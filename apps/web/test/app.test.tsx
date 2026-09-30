@@ -321,7 +321,7 @@ describe('design da mesa', () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.click(await screen.findByText('Distribuir'));
-    const shown = (sel: string) => container.querySelectorAll(`${sel} .card.deal-in`).length;
+    const shown = (sel: string) => container.querySelectorAll(`${sel} .card.shown`).length;
     await waitFor(() => expect(shown('[data-seat="1"]')).toBe(1));
     expect(shown('[aria-label="Dealer"]')).toBe(0);
     expect(shown('[data-seat="2"]')).toBe(0); // lugar 1 recebe primeiro, depois o 2
