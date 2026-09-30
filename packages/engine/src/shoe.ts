@@ -26,6 +26,8 @@ export class Shoe {
   /** Shoe determinístico para testes: a primeira carta da lista é a primeira a sair. */
   static stacked(cards: Card[]) { return new Shoe(cards); }
   get remaining() { return this.cards.length; }
+  /** Cartas restantes, na ordem de saque (apenas para persistência no servidor). */
+  toArray(): Card[] { return this.cards.map((c) => ({ ...c })); }
   draw(): Card {
     const c = this.cards.shift();
     if (!c) throw new Error('SHOE_EMPTY');

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatBRL, type Action, type BetKind, type TableView } from '@bj/engine';
-import { getTable, resetTable, send, type Intent } from './api';
+import { ApiError, cancelRoundDev, createGuest, getServerConfig, getTable, send, type Intent } from './api';
 import { AmountForm } from './AmountForm';
 import { CardView } from './CardView';
-import { loadIdentity, newPlayerId, saveIdentity, type Identity } from './identity';
+import { loadIdentity, saveIdentity, type Identity } from './identity';
 import { visualColumn } from './layout';
 import { NameForm } from './NameForm';
 import { RoundMessage } from './RoundMessage';
@@ -34,56 +34,83 @@ export function App() {
   const busyRef = useRef(false);
   const shownBalance = useRef<number | null>(null);
 
-  const playerId = identity?.id;
+  const token = identity?.token;
+  const [devTools, setDevTools] = useState(false);
+
+  /** Sessão inválida/expirada no servidor: volta à tela de nome (o nome é lembrado). */
+  const onApiError = useCallback((e: unknown) => {
+    if (e instanceof ApiError && e.status === 401) {
+      const next = { name: identity?.name ?? '' };
+      saveIdentity(next);
+      setIdentity(next);
+      setTable(null);
+      return;
+    }
+    setError('Falha de comunicação com o servidor.');
+  }, [identity?.name]);
 
   const cmd = useCallback(async (intent: Intent) => {
-    if (!playerId || busyRef.current) return;
+    if (!token || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     try {
-      const { result, table } = await send(playerId, intent);
+      const { result, table } = await send(token, intent);
       setTable(table);
       setError(result.ok ? '' : result.message);
-    } catch {
-      setError('Falha de comunicação com o servidor.');
+      if (table.me && intent.type === 'setName') {
+        const next = { id: table.me.id, name: table.me.name, token };
+        saveIdentity(next);
+        setIdentity(next);
+      }
+    } catch (e) {
+      onApiError(e);
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [playerId]);
+  }, [token, onApiError]);
 
-  // Ao abrir (ou se o servidor foi reiniciado), registra o nome salvo: mesmo id = mesma carteira.
+  // Ao abrir: consulta o estado no servidor (a carteira vive lá; aqui só há a sessão).
   useEffect(() => {
-    if (!identity) return;
-    cmd({ type: 'setName', name: identity.name });
-  }, [identity?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (identity && table && !table.me && !busyRef.current) cmd({ type: 'setName', name: identity.name });
-  }, [table?.me]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!token) return;
+    getTable(token).then(setTable).catch(onApiError);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { getServerConfig().then((c) => setDevTools(c.devTools)).catch(() => {}); }, []);
 
   // Atualização periódica (outros navegadores/jogadores na mesma mesa), sem interromper a animação.
   useEffect(() => {
-    if (!playerId) return;
+    if (!token) return;
     const t = setInterval(async () => {
       if (busyRef.current || presRef.current.presenting) return;
       try {
-        const next = await getTable(playerId);
+        const next = await getTable(token);
         setTable((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       } catch { /* mantém o estado atual */ }
     }, 2500);
     return () => clearInterval(t);
-  }, [playerId]);
+  }, [token]);
 
-  if (!identity) {
+  if (!identity?.token) {
     return (
       <main className="app">
         <div className="modal">
           <NameForm
             title="Bem-vindo ao Blackjack"
+            initial={identity?.name ?? ''}
             submitLabel="Começar"
-            onSubmit={(name) => { const id = { id: newPlayerId(), name }; saveIdentity(id); setIdentity(id); }}
+            onSubmit={async (name) => {
+              try {
+                const g = await createGuest(name);
+                const next = { id: g.playerId, name, token: g.token };
+                saveIdentity(next);
+                setError('');
+                setTable(g.table);
+                setIdentity(next);
+              } catch { setError('Não foi possível entrar. Verifique a conexão e tente novamente.'); }
+            }}
           />
-          <p className="muted">Créditos fictícios. Seu nome fica salvo neste navegador.</p>
+          {error && <p className="err" role="alert">{error}</p>}
+          <p className="muted">Créditos fictícios. Seu progresso fica salvo no servidor, neste aparelho.</p>
         </div>
       </main>
     );
@@ -98,11 +125,8 @@ export function App() {
   const hasWallet = !!me && me.ledger.length > 0;
 
   const rename = (name: string) => {
-    const next = { id: identity.id, name };
-    saveIdentity(next);
-    setIdentity(next);
     setPanel(null);
-    cmd({ type: 'setName', name });
+    cmd({ type: 'setName', name }); // o servidor atualiza o nome em todos os lugares; a carteira não muda
   };
 
   return (
@@ -227,7 +251,7 @@ export function App() {
       <details className="log">
         <summary>Registro da mesa</summary>
         <ol>{table.log.map((l, i) => <li key={i}>{l}</li>)}</ol>
-        <button className="ghost" onClick={async () => setTable(await resetTable(identity.id))}>Reiniciar simulação</button>
+        {devTools && <button className="ghost" onClick={async () => { await cancelRoundDev(token!).catch(() => {}); setTable(await getTable(token)); }}>Cancelar rodada (dev)</button>}
       </details>
       {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
     </main>

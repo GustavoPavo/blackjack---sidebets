@@ -8,7 +8,7 @@ import { Shoe, type Rng } from './shoe';
 import {
   ACTIONS, BET_KINDS, RULES, RuleError,
   type Action, type BetKind, type BetResult, type Command, type CommandResult, type Hand,
-  type Phase, type Player, type ResultKind, type Seat,
+  SNAPSHOT_VERSION, type Phase, type Player, type ResultKind, type Seat, type TableSnapshot,
 } from './types';
 
 export interface TableOptions {
@@ -538,6 +538,10 @@ export class Table {
 
   private nextRound() {
     this.need('SETTLEMENT');
+    this.resetRound();
+  }
+
+  private resetRound() {
     for (const s of this.seats) {
       s.bets = emptyBets(); // `lastBets` e o ocupante permanecem
       s.confirmed = false;
@@ -550,5 +554,67 @@ export class Table {
     this.dealer = { cards: [], seq: [], holeHidden: false };
     this.round++;
     this.phase = 'BETTING';
+  }
+
+  // ------------------------------------------------------------ persistência e administração
+  /** Estado da mesa (sem carteiras) serializável em JSON, incluindo o shoe restante. */
+  snapshot(): TableSnapshot {
+    return JSON.parse(JSON.stringify({
+      version: SNAPSHOT_VERSION, phase: this.phase, round: this.round, seats: this.seats, dealer: this.dealer,
+      shoe: this.shoe ? this.shoe.toArray() : null, log: this.log, drawn: this.drawn,
+    }));
+  }
+
+  /**
+   * Restaura um snapshot. Os jogadores (`this.players`) devem já estar carregados. Falha (sem alterar nada)
+   * se o snapshot for inconsistente: é preferível não iniciar a perder ou duplicar créditos em silêncio.
+   */
+  restore(snap: TableSnapshot) {
+    const bad = (why: string) => { throw new Error(`Snapshot da mesa inválido: ${why}`); };
+    if (!snap || snap.version !== SNAPSHOT_VERSION) bad('versão desconhecida');
+    if (!['BETTING', 'INSURANCE', 'PLAYER_TURNS', 'SETTLEMENT'].includes(snap.phase)) bad(`fase ${snap.phase}`);
+    if (!Number.isInteger(snap.round) || snap.round < 1 || !Number.isInteger(snap.drawn) || snap.drawn < 0) bad('contadores');
+    if (!Array.isArray(snap.seats) || snap.seats.length !== RULES.seats) bad('lugares');
+    snap.seats.forEach((s, i) => {
+      if (s.index !== i) bad('índice de lugar');
+      if (s.playerId !== null && !this.players.has(s.playerId)) bad(`lugar ${i + 1} aponta para jogador inexistente`);
+      for (const k of BET_KINDS) if (!Number.isSafeInteger(s.bets[k]) || s.bets[k] < 0) bad('aposta inválida');
+      for (const h of s.hands) {
+        if (!Number.isSafeInteger(h.bet) || h.bet <= 0 || h.cards.length !== h.seq.length) bad('mão inválida');
+      }
+    });
+    if (!snap.dealer || snap.dealer.cards.length !== snap.dealer.seq.length) bad('dealer');
+    const copy: TableSnapshot = JSON.parse(JSON.stringify(snap));
+    this.phase = copy.phase;
+    this.round = copy.round;
+    this.seats = copy.seats;
+    this.dealer = copy.dealer;
+    this.shoe = copy.shoe ? Shoe.stacked(copy.shoe) : null;
+    this.log = copy.log;
+    this.drawn = copy.drawn;
+  }
+
+  /**
+   * Cancela a rodada em andamento devolvendo EXATAMENTE as apostas ainda não liquidadas (mãos não
+   * desistidas, Insurance e Buster Lucky). 23+1, Pares e Surrender já foram liquidados e permanecem.
+   * Ferramenta administrativa/de desenvolvimento (não é um comando de jogador).
+   */
+  abortRound(): Cents {
+    let refunded = 0;
+    if (this.phase === 'SETTLEMENT') { this.resetRound(); return 0; }
+    for (const s of this.seats) {
+      if (!s.playerId) continue;
+      if (this.phase === 'BETTING') {
+        for (const k of BET_KINDS) refunded += s.bets[k];
+        this.refundBets(s, BET_KINDS);
+        continue;
+      }
+      for (const h of s.hands) if (h.status !== 'surrendered') { this.credit(s, h.bet); refunded += h.bet; }
+      if (s.insurance > 0) { this.credit(s, s.insurance); refunded += s.insurance; }
+      if (s.bets.buster > 0) { this.credit(s, s.bets.buster); refunded += s.bets.buster; }
+    }
+    this.say(`Rodada cancelada: ${formatBRL(refunded)} devolvidos.`);
+    this.resetRound();
+    return refunded;
   }
 }

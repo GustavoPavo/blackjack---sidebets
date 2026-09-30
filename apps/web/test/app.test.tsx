@@ -2,35 +2,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Table, Shoe, toView, type Command } from '@bj/engine';
 import { App } from '../src/App';
 import { ANIMATION } from '../src/usePresentation';
+import { createFakeServer, type FakeServer } from './fakeServer';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+let fake: FakeServer;
 const css = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
-const card = (code: string) => ({ rank: code.slice(0, -1) as any, suit: code.slice(-1) as any });
-let table: Table;
-let n = 0;
-const srv = (c: any) => table.dispatch({ id: `srv-${++n}`, ...c } as Command);
 
-function startServer(shoe: string[] = ['10S', '10D', '9H', '8C']) {
-  table = new Table({ shoeFactory: () => Shoe.stacked(shoe.map(card)), reshuffleBelow: 0 });
-  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-    const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
-    if (url.startsWith('/api/table')) return json(toView(table, new URL(url, 'http://x').searchParams.get('playerId') ?? undefined));
-    if (url === '/api/commands') {
-      const command = JSON.parse(init!.body as string).command;
-      const result = table.dispatch(command);
-      return json({ result, table: toView(table, command.playerId) });
-    }
-    return json({}, 404);
-  });
+function startServer(shoe?: string[]) {
+  fake = createFakeServer(shoe);
+  vi.stubGlobal('fetch', fake.fetch);
 }
-const saved = () => JSON.parse(localStorage.getItem('bj.identity.v1') ?? 'null');
-const setIdentity = (id: string, name: string) => localStorage.setItem('bj.identity.v1', JSON.stringify({ id, name }));
-/** Registra no servidor o jogador `ana` com buy-in de R$ 1.000,00. */
-const seedAna = () => { srv({ type: 'setName', playerId: 'ana', name: 'Ana' }); srv({ type: 'buyIn', playerId: 'ana', amount: 100_000 }); };
+const srv = (c: any) => fake.srv(c);
+const saved = () => JSON.parse(localStorage.getItem('bj.identity.v2') ?? 'null');
+/** Jogador já cadastrado no servidor, com sessão salva neste navegador. */
+function loginAs(id: string, name: string, buyIn = 0) {
+  const token = fake.addPlayer(id, name, buyIn);
+  localStorage.setItem('bj.identity.v2', JSON.stringify({ id, name, token }));
+}
 
 const seat = (k: number) => screen.getByRole('region', { name: `Lugar ${k}` });
 const fast = { firstMs: 1, stepMs: 1, holdMs: 1 };
@@ -58,10 +49,31 @@ describe('nome do jogador', () => {
     expect(saved().id).toBe(id);
   });
 
+  it('sessão inválida no servidor volta à tela de nome, lembrando o nome', async () => {
+    startServer();
+    localStorage.setItem('bj.identity.v2', JSON.stringify({ id: 'x', name: 'Ana', token: 'bj_' + 'q'.repeat(43) }));
+    render(<App />);
+    const input = (await screen.findByLabelText('Seu nome')) as HTMLInputElement;
+    expect(input.value).toBe('Ana');
+    expect(saved()).toEqual({ name: 'Ana' });
+  });
+
+  it('o cliente nunca envia playerId (a identidade vem da sessão)', async () => {
+    startServer();
+    loginAs('ana', 'Ana', 100_000);
+    const bodies: string[] = [];
+    const inner = fake.fetch;
+    vi.stubGlobal('fetch', (u: string, i?: RequestInit) => { if (i?.body) bodies.push(String(i.body)); return inner(u, i); });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(within(await screen.findByRole('region', { name: 'Lugar 1' })).getByText('Sentar aqui'));
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies.join('')).not.toMatch(/playerId/);
+  });
+
   it('"Editar nome" atualiza o nome em todos os lugares, sem mudar identidade nem saldo', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     srv({ type: 'takeSeat', playerId: 'ana', seat: 3 });
     const user = userEvent.setup();
@@ -75,9 +87,9 @@ describe('nome do jogador', () => {
     await waitFor(() => expect(within(seat(1)).getByText(/Ana Maria/)).toBeTruthy());
     expect(within(seat(4)).getByText(/Ana Maria/)).toBeTruthy();
     expect(screen.getByTestId('player-name').textContent).toBe('Ana Maria');
-    expect(saved()).toEqual({ id: 'ana', name: 'Ana Maria' });
-    expect(table.players.size).toBe(1);
-    expect(table.balanceOf('ana')).toBe(100_000);
+    expect(saved()).toMatchObject({ id: 'ana', name: 'Ana Maria' });
+    expect(fake.table.players.size).toBe(1);
+    expect(fake.table.balanceOf('ana')).toBe(100_000);
     expect(screen.getByLabelText('Saldo do jogador').textContent).toBe('R$ 1.000,00');
   });
 });
@@ -85,7 +97,7 @@ describe('nome do jogador', () => {
 describe('mesa', () => {
   it('lugares ficam na ordem visual 5, 4, 3, 2, 1 (lugar 1 à direita)', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     render(<App />);
     await screen.findAllByText('Lugar disponível');
     const slots = screen.getAllByRole('region', { name: /^Lugar \d$/ }).map((el) => ({
@@ -100,7 +112,7 @@ describe('mesa', () => {
 
   it('5 lugares disponíveis e aviso de simulação local', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     render(<App />);
     await screen.findByText(/Simulação local/);
     expect(screen.getByText(/Não é multiplayer online/)).toBeTruthy();
@@ -109,7 +121,7 @@ describe('mesa', () => {
 
   it('buy-in inicial no topo (máx. R$ 1.000,00); depois senta em vários lugares sem novo buy-in', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Buy-in inicial');
@@ -126,10 +138,10 @@ describe('mesa', () => {
     await waitFor(() => expect(screen.getByLabelText('Saldo do jogador').textContent).toBe('R$ 1.000,00'));
     expect(screen.queryByText('Buy-in inicial')).toBeNull(); // só uma vez
     await user.click(within(seat(1)).getByText('Sentar aqui'));
-    await waitFor(() => expect(table.seats[0]!.playerId).toBe('ana'));
+    await waitFor(() => expect(fake.table.seats[0]!.playerId).toBe('ana'));
     await user.click(within(seat(5)).getByText('Sentar aqui'));
-    await waitFor(() => expect(table.seats[4]!.playerId).toBe('ana'));
-    expect(table.players.get('ana')!.ledger).toHaveLength(1); // nenhum buy-in por lugar
+    await waitFor(() => expect(fake.table.seats[4]!.playerId).toBe('ana'));
+    expect(fake.table.players.get('ana')!.ledger).toHaveLength(1); // nenhum buy-in por lugar
     expect(within(seat(1)).queryByText(/buy-in/i)).toBeNull();
     // apostas dos dois lugares consomem a mesma carteira exibida no topo
     await user.click(within(seat(1)).getByText('Principal'));
@@ -140,8 +152,7 @@ describe('mesa', () => {
 
   it('side bets desabilitadas sem aposta principal; rebuy some depois de confirmar', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     const user = userEvent.setup();
     render(<App />);
@@ -149,7 +160,7 @@ describe('mesa', () => {
     expect((within(seat(1)).getByText('23+1').closest('button') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Rebuy')).toBeTruthy();
     await user.click(within(seat(1)).getByText('Principal'));
-    await waitFor(() => expect(table.seats[0]!.bets.main).toBe(500));
+    await waitFor(() => expect(fake.table.seats[0]!.bets.main).toBe(500));
     expect((within(seat(1)).getByText('23+1').closest('button') as HTMLButtonElement).disabled).toBe(false);
     await user.click(within(seat(1)).getByText('Confirmar apostas'));
     await waitFor(() => expect(screen.queryByText('Rebuy')).toBeNull());
@@ -159,8 +170,7 @@ describe('mesa', () => {
 describe('Repetir aposta e X2', () => {
   async function afterRound() {
     startServer(['10S', '10D', '9H', '8C']);
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     srv({ type: 'setBet', playerId: 'ana', seat: 0, kind: 'main', amount: 1000 });
     srv({ type: 'setBet', playerId: 'ana', seat: 0, kind: 'buster', amount: 250 });
@@ -176,17 +186,17 @@ describe('Repetir aposta e X2', () => {
     await screen.findByRole('region', { name: 'Lugar 1' });
     await screen.findByText('Repetir aposta');
     expect(within(seat(1)).getByText('X2')).toBeTruthy();
-    const start = table.balanceOf('ana');
+    const start = fake.table.balanceOf('ana');
     await user.click(within(seat(1)).getByText('Repetir aposta'));
-    await waitFor(() => expect(table.seats[0]!.bets.main).toBe(1000));
+    await waitFor(() => expect(fake.table.seats[0]!.bets.main).toBe(1000));
     await user.click(within(seat(1)).getByText('Repetir aposta'));
     await user.click(within(seat(1)).getByText('Repetir aposta'));
-    expect(table.seats[0]!.bets).toMatchObject({ main: 1000, buster: 250 });
-    expect(table.balanceOf('ana')).toBe(start - 1250);
+    expect(fake.table.seats[0]!.bets).toMatchObject({ main: 1000, buster: 250 });
+    expect(fake.table.balanceOf('ana')).toBe(start - 1250);
     await user.click(within(seat(1)).getByText('X2'));
-    await waitFor(() => expect(table.seats[0]!.bets.main).toBe(2000));
+    await waitFor(() => expect(fake.table.seats[0]!.bets.main).toBe(2000));
     await user.click(within(seat(1)).getByText('X2'));
-    expect(table.balanceOf('ana')).toBe(start - 2500);
+    expect(fake.table.balanceOf('ana')).toBe(start - 2500);
     // ainda dá para confirmar e jogar
     expect(within(seat(1)).getByText('Confirmar apostas')).toBeTruthy();
   });
@@ -194,16 +204,16 @@ describe('Repetir aposta e X2', () => {
     await afterRound();
     // esvazia a carteira em outro lugar do mesmo jogador
     srv({ type: 'takeSeat', playerId: 'ana', seat: 2 });
-    srv({ type: 'setBet', playerId: 'ana', seat: 2, kind: 'main', amount: table.balanceOf('ana') - 500 });
+    srv({ type: 'setBet', playerId: 'ana', seat: 2, kind: 'main', amount: fake.table.balanceOf('ana') - 500 });
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole('region', { name: 'Lugar 1' });
     await screen.findByText('X2');
-    const before = table.balanceOf('ana');
+    const before = fake.table.balanceOf('ana');
     await user.click(within(seat(1)).getByText('X2'));
     expect((await screen.findByRole('alert')).textContent).toMatch(/Saldo insuficiente para X2/);
-    expect(table.seats[0]!.bets.main).toBe(0);
-    expect(table.balanceOf('ana')).toBe(before);
+    expect(fake.table.seats[0]!.bets.main).toBe(0);
+    expect(fake.table.balanceOf('ana')).toBe(before);
   });
 });
 
@@ -211,8 +221,7 @@ describe('mensagem de ganho total', () => {
   it('só aparece depois da distribuição, dos turnos e da animação final do dealer', async () => {
     startServer(['10S', '10D', '9H', '8C']); // jogador 19 vs dealer 18
     Object.assign(ANIMATION, { firstMs: 120, stepMs: 120, holdMs: 120 });
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     srv({ type: 'setBet', playerId: 'ana', seat: 0, kind: 'main', amount: 500 });
     srv({ type: 'confirmBets', playerId: 'ana', seat: 0 });
@@ -238,8 +247,7 @@ describe('mensagem de ganho total', () => {
 
   it('empate → "Rodada empatada"; perda → "Resultado da rodada: −R$ …"', async () => {
     startServer(['10S', '10D', '8H', '8C']); // 18 x 18
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     srv({ type: 'setBet', playerId: 'ana', seat: 0, kind: 'main', amount: 500 });
     srv({ type: 'confirmBets', playerId: 'ana', seat: 0 });
@@ -254,7 +262,7 @@ describe('mensagem de ganho total', () => {
 describe('design da mesa', () => {
   it('cinco lugares e o dealer ficam dentro da mesa (borda de madeira + feltro)', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     const { container } = render(<App />);
     await screen.findAllByText('Lugar disponível');
     const rim = container.querySelector('.table-surface > .table-rim')!;
@@ -266,7 +274,7 @@ describe('design da mesa', () => {
 
   it('fichas circulares: uma para cada valor, todas com cores diferentes', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     render(<App />);
     await screen.findByRole('radio', { name: 'Ficha R$ 2,50' });
     const names = screen.getAllByRole('radio').map((r) => r.getAttribute('aria-label'));
@@ -282,7 +290,7 @@ describe('design da mesa', () => {
 
   it('"Regras e pagamentos" abre o guia com as três side bets e fecha (botão ou Esc)', async () => {
     startServer();
-    setIdentity('ana', 'Ana');
+    loginAs('ana', 'Ana');
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByText(/Regras e pagamentos/));
@@ -303,8 +311,7 @@ describe('design da mesa', () => {
   it('distribuição animada começa pelos jogadores: dealer só recebe depois da 1ª carta dos lugares', async () => {
     startServer(['10S', '10H', '10D', '9C', '8C', '7C']); // lugares 1 e 2 apostando
     Object.assign(ANIMATION, { firstMs: 80, stepMs: 250, holdMs: 80 });
-    setIdentity('ana', 'Ana');
-    seedAna();
+    loginAs('ana', 'Ana', 100_000);
     srv({ type: 'takeSeat', playerId: 'ana', seat: 0 });
     srv({ type: 'takeSeat', playerId: 'ana', seat: 1 });
     for (const s of [0, 1]) {

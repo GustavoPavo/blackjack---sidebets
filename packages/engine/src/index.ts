@@ -8,3 +8,4 @@ export * from './types';
 export * from './roundMessage';
 export * from './table';
 export * from './view';
+export * from './dto';

@@ -1,70 +1,141 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { Shoe, Table } from '@bj/engine';
 import { createApp } from '../src/app';
+import { openDatabase } from '../src/db/sqlite';
+import { GameService } from '../src/gameService';
+import { SqliteRepository } from '../src/sqliteRepository';
+import { Shoe } from '@bj/engine';
+import { c } from './helpers';
 
 let server: Server;
 let base: string;
-const card = (rank: any, suit: any) => ({ rank, suit });
+let service: GameService;
 
 beforeAll(async () => {
-  const seq = [card('10', 'S'), card('10', 'D'), card('9', 'H'), card('8', 'C')];
-  server = createApp(() => new Table({ shoeFactory: () => Shoe.stacked(seq), reshuffleBelow: 0 })).listen(0);
+  const seq = ['10S', '10D', '9H', '8C'].map(c);
+  service = new GameService(new SqliteRepository(openDatabase(':memory:')), { tableOptions: { shoeFactory: () => Shoe.stacked(seq), reshuffleBelow: 0 } });
+  server = createApp({ service, config: { allowedOrigins: ['https://app.exemplo.test', 'capacitor://localhost'], devTools: false } }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => { server.close(); });
 
-const post = (command: unknown) =>
-  fetch(`${base}/api/commands`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) })
-    .then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+type Res = { status: number; body: any; headers: Headers };
+async function call(method: string, path: string, opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<Res> {
+  const r = await fetch(base + path, {
+    method,
+    headers: { 'content-type': 'application/json', ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}), ...opts.headers },
+    body: opts.body === undefined ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body),
+  });
+  const text = await r.text();
+  return { status: r.status, body: text ? JSON.parse(text) : null, headers: r.headers };
+}
+let n = 0;
+const cmd = (token: string, command: Record<string, unknown>) => call('POST', '/api/commands', { token, body: { command: { id: `k${++n}`, ...command } } });
+const guest = async (name: string) => (await call('POST', '/api/guest', { body: { name } })).body as { token: string; playerId: string; table: any };
 
-describe('API', () => {
-  it('fluxo completo: nome, carteira única, lugares, rodada; cliente não escolhe cartas nem vê a fechada', async () => {
-    const P = 'jogador-1';
-    expect((await post({ id: 'a0', type: 'setName', playerId: P, name: 'Ana' })).body.table.me.name).toBe('Ana');
-    expect((await post({ id: 'a1', type: 'buyIn', playerId: P, amount: 100_000 })).status).toBe(200);
-    expect((await post({ id: 'a1b', type: 'buyIn', playerId: P, amount: 1 })).body.result.code).toBe('ALREADY_BOUGHT_IN');
-    expect((await post({ id: 'a3', type: 'rebuy', playerId: P, amount: 100_001 })).status).toBe(422);
-    await post({ id: 'a3b', type: 'takeSeat', playerId: P, seat: 0 });
-    const two = await post({ id: 'a3c', type: 'takeSeat', playerId: P, seat: 4 });
-    expect(two.body.table.me.seats).toEqual([0, 4]); // um jogador, dois lugares, uma carteira
-    await post({ id: 'a4', type: 'setBet', playerId: P, seat: 0, kind: 'main', amount: 500 });
-    await post({ id: 'a5', type: 'confirmBets', playerId: P, seat: 0 });
-    const dealt = await post({ id: 'a6', type: 'deal', playerId: P, cards: ['AS', 'AS'] });
+describe('sessão de convidado', () => {
+  it('cria convidado, devolve o token uma vez e a visão com a carteira', async () => {
+    const r = await call('POST', '/api/guest', { body: { name: 'Ana' } });
+    expect(r.status).toBe(201);
+    expect(r.body.token).toMatch(/^bj_/);
+    expect(r.body.table.me).toMatchObject({ name: 'Ana', balance: 0 });
+    expect((await call('GET', '/api/table', { token: r.body.token })).body.me.id).toBe(r.body.playerId);
+  });
+  it('nome vazio é recusado', async () => {
+    expect((await call('POST', '/api/guest', { body: { name: '  ' } })).status).toBe(400);
+    expect((await call('POST', '/api/guest', { body: {} })).status).toBe(400);
+  });
+  it('mesa pública sem sessão; token inválido e comandos sem sessão → 401', async () => {
+    const pub = await call('GET', '/api/table');
+    expect(pub.status).toBe(200);
+    expect(pub.body.me).toBeNull();
+    expect((await call('GET', '/api/table', { token: 'bj_' + 'z'.repeat(43) })).status).toBe(401);
+    expect((await call('POST', '/api/commands', { body: { command: { id: 'x', type: 'deal' } } })).status).toBe(401);
+    expect((await call('GET', '/api/stats')).status).toBe(401);
+    expect((await call('GET', '/api/preferences')).status).toBe(401);
+  });
+  it('o id público de outro jogador não serve como credencial, nem dentro do comando', async () => {
+    const a = await guest('Ana'), b = await guest('Beto');
+    expect((await call('GET', '/api/table', { token: a.playerId })).status).toBe(401);
+    await cmd(a.token, { type: 'buyIn', amount: 100_000 });
+    await cmd(a.token, { type: 'takeSeat', seat: 2 });
+    const hack = await cmd(b.token, { type: 'setBet', seat: 2, kind: 'main', amount: 500, playerId: a.playerId });
+    expect(hack.status).toBe(422);
+    expect(hack.body.result.code).toBe('NOT_SEAT_OWNER');
+    const steal = await cmd(b.token, { type: 'leave', seat: 2, playerId: a.playerId });
+    expect(steal.body.result.code).toBe('NOT_SEAT_OWNER');
+    await cmd(a.token, { type: 'leave', seat: 2 });
+  });
+  it('logout revoga o token', async () => {
+    const a = await guest('Ana');
+    expect((await call('POST', '/api/session/logout', { token: a.token })).status).toBe(204);
+    expect((await call('GET', '/api/table', { token: a.token })).status).toBe(401);
+  });
+});
+
+describe('jogo pela API', () => {
+  it('rodada completa; o cliente não escolhe cartas; repetir o id não repete o efeito', async () => {
+    const a = await guest('Ana');
+    await cmd(a.token, { type: 'buyIn', amount: 100_000 });
+    expect((await cmd(a.token, { type: 'buyIn', amount: 1 })).body.result.code).toBe('ALREADY_BOUGHT_IN');
+    await cmd(a.token, { type: 'takeSeat', seat: 0 });
+    await cmd(a.token, { type: 'setBet', seat: 0, kind: 'main', amount: 500 });
+    await cmd(a.token, { type: 'confirmBets', seat: 0 });
+    const dealt = await cmd(a.token, { type: 'deal', cards: ['AS', 'AS'] });
     expect(dealt.body.table.phase).toBe('PLAYER_TURNS');
     expect(dealt.body.table.dealer.cards[1]).toBeNull();
-    expect(dealt.body.table.seats[0].hands[0].cards[0]).toEqual(card('10', 'S')); // veio do shoe, não do cliente
-    const stand = await post({ id: 'a7', type: 'action', playerId: P, seat: 0, action: 'stand' });
-    expect(stand.body.table.phase).toBe('SETTLEMENT');
-    expect(stand.body.table.me.balance).toBe(99_500 + 500 * 2); // 20 vs 18
-    expect(stand.body.table.roundSummary[0].message.text).toBe('Você ganhou R$ 5,00');
-    const again = await post({ id: 'a7', type: 'action', playerId: P, seat: 0, action: 'stand' });
+    expect(dealt.body.table.seats[0].hands[0].cards[0]).toEqual({ rank: '10', suit: 'S' });
+    const body = { command: { id: 'stand-1', type: 'action', seat: 0, action: 'stand' } };
+    const first = await call('POST', '/api/commands', { token: a.token, body });
+    expect(first.body.table.me.balance).toBe(99_500 + 1000);
+    expect(first.body.table.roundSummary[0].message.text).toBe('Você ganhou R$ 5,00');
+    const again = await call('POST', '/api/commands', { token: a.token, body });
     expect(again.body.result).toMatchObject({ ok: true, duplicate: true });
     expect(again.body.table.me.balance).toBe(100_500);
+    const st = (await call('GET', '/api/stats', { token: a.token })).body;
+    expect(st).toMatchObject({ rounds: 1, hands: 1, wins: 1, net: 500, creditsAdded: 100_000 });
+    const hist = (await call('GET', '/api/history?limit=5', { token: a.token })).body;
+    expect(hist).toHaveLength(1);
+    expect(hist[0].seats[0].results[0]).toMatchObject({ kind: 'main', net: 500 });
+    await cmd(a.token, { type: 'nextRound' });
   });
-  it('outro jogador não controla o lugar alheio', async () => {
-    await post({ id: 'b0', type: 'setName', playerId: 'outro', name: 'Beto' });
-    const r = await post({ id: 'b1', type: 'setBet', playerId: 'outro', seat: 0, kind: 'main', amount: 500 });
-    expect(r.body.result.code).toBe('WRONG_PHASE'); // rodada ainda em SETTLEMENT
-    await post({ id: 'b2', type: 'nextRound', playerId: 'outro' });
-    const r2 = await post({ id: 'b3', type: 'setBet', playerId: 'outro', seat: 0, kind: 'main', amount: 500 });
-    expect(r2.body.result.code).toBe('NOT_SEAT_OWNER');
+  it('corpo inválido → 400; comando sem id → erro claro', async () => {
+    const a = await guest('Ana');
+    expect((await call('POST', '/api/commands', { token: a.token, body: '{ruim' })).status).toBe(400);
+    expect((await call('POST', '/api/commands', { token: a.token, body: {} })).status).toBe(400);
+    const r = await call('POST', '/api/commands', { token: a.token, body: { command: { type: 'deal' } } });
+    expect(r.body.result.code).toBe('MISSING_COMMAND_ID');
   });
-  it('rejeita corpo inválido e comando sem id', async () => {
-    const r = await fetch(`${base}/api/commands`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{bad' });
-    expect(r.status).toBe(400);
-    expect((await post({ type: 'deal', playerId: 'x' })).body.result.code).toBe('MISSING_COMMAND_ID');
-    expect((await fetch(`${base}/api/commands`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(400);
+});
+
+describe('preferências, CORS e limites', () => {
+  it('preferências: padrão, atualização parcial, validação', async () => {
+    const a = await guest('Ana');
+    expect((await call('GET', '/api/preferences', { token: a.token })).body).toMatchObject({ sound: true, animationSpeed: 'normal' });
+    const put = await call('PUT', '/api/preferences', { token: a.token, body: { sound: false, animationSpeed: 'fast' } });
+    expect(put.body).toMatchObject({ sound: false, animationSpeed: 'fast', vibration: true });
+    expect((await call('PUT', '/api/preferences', { token: a.token, body: { sound: 'sim' } })).status).toBe(400);
+    expect((await call('PUT', '/api/preferences', { token: a.token, body: { hack: true } })).status).toBe(400);
+    expect((await call('GET', '/api/preferences', { token: a.token })).body.sound).toBe(false);
   });
-  it('GET /api/table?playerId= personaliza a visão e expõe modo de simulação local', async () => {
-    const t = await (await fetch(`${base}/api/table?playerId=jogador-1`)).json();
-    expect(t.mode).toBe('local-simulation');
-    expect(t.me.name).toBe('Ana');
-    expect(t.seats[0].mine).toBe(true);
-    const anon = await (await fetch(`${base}/api/table`)).json();
-    expect(anon.me).toBeNull();
-    expect(JSON.stringify(t)).not.toMatch(/shoe"\s*:\s*\[/);
+  it('CORS: só origens autorizadas, com pré-voo (preflight)', async () => {
+    const ok = await call('OPTIONS', '/api/commands', { headers: { origin: 'capacitor://localhost', 'access-control-request-method': 'POST' } });
+    expect(ok.status).toBe(204);
+    expect(ok.headers.get('access-control-allow-origin')).toBe('capacitor://localhost');
+    expect(ok.headers.get('access-control-allow-headers')).toMatch(/authorization/);
+    const bad = await call('GET', '/api/table', { headers: { origin: 'https://malicioso.test' } });
+    expect(bad.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('ferramentas de desenvolvimento ficam desligadas por padrão', async () => {
+    const a = await guest('Ana');
+    expect((await call('POST', '/api/dev/cancel-round', { token: a.token })).status).toBe(404);
+    expect((await call('GET', '/api/config')).body).toEqual({ devTools: false });
+  });
+  it('limita a criação de convidados por origem de rede', async () => {
+    let limited = 0;
+    for (let i = 0; i < 40; i++) if ((await call('POST', '/api/guest', { body: { name: `g${i}` } })).status === 429) limited++;
+    expect(limited).toBeGreaterThan(0);
   });
 });

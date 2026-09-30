@@ -114,3 +114,16 @@ export type CommandResult =
 export class RuleError extends Error {
   constructor(public code: ErrorCode, message: string) { super(message); }
 }
+
+export const SNAPSHOT_VERSION = 1;
+/** Estado da mesa (sem as carteiras dos jogadores) para persistência e retomada após reinício. */
+export interface TableSnapshot {
+  version: number;
+  phase: Phase;
+  round: number;
+  seats: Seat[];
+  dealer: { cards: Card[]; seq: number[]; holeHidden: boolean };
+  shoe: Card[] | null;
+  log: string[];
+  drawn: number;
+}
