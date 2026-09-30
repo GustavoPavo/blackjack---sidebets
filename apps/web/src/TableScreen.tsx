@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatBRL, type BetKind, type TableView } from '@bj/engine';
 import { AmountForm } from './AmountForm';
-import { ApiError, cancelRoundDev, getServerConfig, getTable, send, startSandbox, type Intent, type PlayMode } from './api';
+import { ApiError, NetworkError, cancelRoundDev, getServerConfig, getTable, send, startSandbox, type Intent, type PlayMode } from './api';
+import { ConnectionBanner } from './ConnectionBanner';
 import { ControlsBody } from './Controls';
 import { Dealer } from './Dealer';
 import { feedback, setFeedbackPrefs } from './feedback';
 import { GameContext, type Game } from './gameContext';
 import { visualColumn } from './layout';
 import { MenuSheet } from './MenuSheet';
+import { onResume } from './native';
 import { NameForm } from './NameForm';
 import { usePrefs } from './prefs';
 import { RoundMessage } from './RoundMessage';
@@ -19,6 +21,7 @@ import { StatsSheet } from './StatsSheet';
 import { TopBar } from './TopBar';
 import { TutorialCoach } from './Tutorial';
 import { tutorialStep } from './tutorial';
+import { useConnectivity } from './useConnectivity';
 import { useLayoutMode } from './useMediaQuery';
 import { timingFor, usePresentation } from './usePresentation';
 
@@ -43,6 +46,11 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
   const [offerDismissed, setOfferDismissed] = useState(false);
   const [selectedSeat, setSelectedSeat] = useState(0);
   const [devTools, setDevTools] = useState(false);
+  const [linkLost, setLinkLost] = useState(false);
+  const online = useConnectivity();
+  const offline = !online || linkLost;
+  const offlineRef = useRef(offline);
+  offlineRef.current = offline;
   const { prefs, setPrefs, reducedMotion, ready } = usePrefs();
   const layout = useLayoutMode();
   const sandbox = mode !== 'real';
@@ -64,6 +72,7 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
 
   const cmd = useCallback(async (intent: Intent) => {
     if (busyRef.current) return;
+    if (offlineRef.current) { setError('Sem conexão com o servidor.'); return; }
     busyRef.current = true;
     setBusy(true);
     try {
@@ -76,12 +85,44 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
         if ((intent.type === 'setBet' && intent.amount > 0) || intent.type === 'repeatBets') feedback.chip();
       }
     } catch (e) {
-      onApiError(e);
+      if (e instanceof NetworkError) {
+        // A ação pode ou não ter chegado ao servidor (a repetição automática usa o MESMO id, então nunca duplica).
+        // Não reenviamos por conta própria: ao reconectar o estado é consultado no servidor.
+        setLinkLost(true);
+        setError('Sem conexão. A última ação pode não ter chegado ao servidor; o estado será sincronizado ao reconectar.');
+      } else onApiError(e);
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
   }, [token, mode, sandbox, onApiError, onIdentity]);
+
+  /** Sincroniza com o servidor SEM repetir ações e sem animar (estado final direto). */
+  const resync = useCallback(async () => {
+    if (busyRef.current) return; // uma ação em andamento já vai atualizar o estado ao terminar
+    try {
+      const t = await getTable(token, mode);
+      setTable(t);
+      presRef.current.snap(t);
+      setLinkLost(false);
+      setError('');
+    } catch (e) {
+      if (e instanceof NetworkError) setLinkLost(true); else onApiError(e);
+    }
+  }, [token, mode, onApiError]);
+
+  // Ao voltar do segundo plano ou da falta de conexão: consulta o estado do servidor.
+  useEffect(() => onResume(() => { void resync(); }), [resync]);
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    if (online && !wasOnline.current) void resync();
+    wasOnline.current = online;
+  }, [online, resync]);
+  useEffect(() => {
+    if (!linkLost) return;
+    const t = setInterval(() => { void resync(); }, 3000);
+    return () => clearInterval(t);
+  }, [linkLost, resync]);
 
   // Entrada: mesa real / treino (retoma a sessão) / demonstração (sempre recomeça do zero).
   useEffect(() => {
@@ -93,7 +134,7 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
   useEffect(() => {
     if (sandbox) return;
     const t = setInterval(async () => {
-      if (busyRef.current || presRef.current.presenting) return;
+      if (busyRef.current || presRef.current.presenting || offlineRef.current) return;
       try {
         const next = await getTable(token);
         setTable((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
@@ -155,7 +196,7 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
   const tut = mode === 'demo' ? tutorialStep(table, chipTouched) : null;
 
   const game: Game = {
-    table, pres, chip, busy, cmd, hasWallet, fly, layout, selectedSeat,
+    table, pres, chip, busy: busy || offline, cmd, hasWallet, fly, layout, selectedSeat,
     setChip: (v: number) => { setChipState(v); setChipTouched(true); },
     selectSeat: setSelectedSeat,
     bet: (seat: number, kind: BetKind, amount: number) => cmd({ type: 'setBet', seat, kind, amount }),
@@ -208,6 +249,7 @@ export function TableScreen({ token, name, mode, onMode, onIdentity, onSessionLo
           onMenu={() => setSheet('menu')} onRules={() => setSheet('rules')} onRename={() => setSheet('rename')}
           onBuyIn={() => setSheet('buyin')} onRebuy={() => setSheet('rebuy')} />
 
+        {offline && <ConnectionBanner online={online} />}
         {sandbox && (
           <div className="sandbox-banner" role="status">
             <span>{mode === 'training'

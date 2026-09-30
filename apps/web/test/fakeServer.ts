@@ -16,6 +16,7 @@ export function createFakeServer(shoe: string[] = ['10S', '10D', '9H', '8C']) {
   let history: RoundHistoryEntry[] = [];
   let n = 0;
   let offline = false;
+  let dropResponse = false;
 
   const srv = (cmd: Record<string, unknown>) => table.dispatch({ id: `srv-${++n}`, ...cmd } as Command);
   const tokenFor = (id: string) => `bj_${id.padEnd(43, 'x')}`;
@@ -68,6 +69,12 @@ export function createFakeServer(shoe: string[] = ['10S', '10D', '9H', '8C']) {
       case 'GET /api/table': return json(kind ? toView(sandbox(playerId!, kind), playerId, { kind, hints: true }) : toView(table, playerId));
       case 'POST /api/commands': {
         if (!playerId) return json({ error: { code: 'AUTH_REQUIRED', message: 'Entre.' } }, 401);
+        if (dropResponse && !kind) {
+          // o servidor APLICA o comando, mas a resposta se perde no caminho (falha de rede)
+          dropResponse = false;
+          table.dispatch({ ...body.command, id: `${playerId}:${body.command.id}`, playerId });
+          throw new TypeError('Failed to fetch');
+        }
         if (kind) {
           const box = sandbox(playerId, kind);
           const result = box.dispatch({ ...body.command, playerId });
@@ -92,6 +99,7 @@ export function createFakeServer(shoe: string[] = ['10S', '10D', '9H', '8C']) {
   };
   return {
     table, srv, addPlayer, calls, tokens, prefs, sandboxes, fetch: fetchImpl, setOffline: (v: boolean) => { offline = v; },
+    dropNextCommandResponse: () => { dropResponse = true; },
     setStats: (s: PlayerStats, h: RoundHistoryEntry[] = []) => { stats = s; history = h; },
   };
 }

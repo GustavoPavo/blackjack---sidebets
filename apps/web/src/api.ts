@@ -18,7 +18,8 @@ const newId = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const RETRY_DELAYS = [400, 1200, 2500];
+/** Esperas entre tentativas em falhas de rede (mesmo id de comando em todas; ver `request`). */
+export const RETRY_DELAYS = [400, 1200, 2500];
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**

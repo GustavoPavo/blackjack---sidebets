@@ -344,3 +344,8 @@ input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; min-hei
 
 .coach-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; } .coach-head h3 { margin: 0 0 2px; }
 .layout-focus .chip { --s: 52px; } .layout-focus .actionbar .chips { padding-top: 8px; padding-bottom: 6px; margin: 2px 0 4px; }
+
+.connection-banner { position: relative; z-index: 32; margin: 0 0 8px; padding: 8px 12px; border-radius: 10px; background: #5b1a1a; border: 1px solid var(--danger); font-size: .8rem; line-height: 1.35; }
+.layout-focus .connection-banner, .layout-compact .connection-banner { margin: 0 8px 8px; }
+.layout-compact .connection-banner { font-size: .68rem; padding: 3px 8px; margin-bottom: 4px; }
+.gate h2 { font: 500 1.3rem Georgia, serif; margin-bottom: 8px; }

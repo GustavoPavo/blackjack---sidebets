@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PROVISÓRIO: tela de abertura (2732×2732). Conteúdo no centro (zona segura para qualquer proporção de tela). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2732 2732" width="2732" height="2732">
+  <defs><radialGradient id="felt" cx="50%" cy="42%" r="70%"><stop offset="0" stop-color="#127050"/><stop offset=".6" stop-color="#0a4f39"/><stop offset="1" stop-color="#06291e"/></radialGradient></defs>
+  <rect width="2732" height="2732" fill="url(#felt)"/>
+  <g transform="translate(1366 1180) scale(.95)">
+    <circle r="372" fill="#092019" opacity=".55" cy="14"/>
+    <circle r="360" fill="#b33337"/>
+    <circle r="360" fill="none" stroke="#f5e9cc" stroke-width="64" stroke-dasharray="94.2478 94.2478" transform="rotate(8)"/>
+    <circle r="318" fill="none" stroke="#f5e9cc" stroke-width="10"/>
+    <circle r="236" fill="#06291e" stroke="#e4bd74" stroke-width="14"/>
+    <text y="82" text-anchor="middle" font-family="Georgia, 'DejaVu Serif', serif" font-size="250" font-weight="700" fill="#e4bd74">21</text>
+  </g>
+  <text x="1366" y="1720" text-anchor="middle" font-family="Georgia, 'DejaVu Serif', serif" font-size="150" letter-spacing="26" fill="#e4bd74">BLACKJACK</text>
+  <text x="1366" y="1880" text-anchor="middle" font-family="Georgia, 'DejaVu Serif', serif" font-style="italic" font-size="150" letter-spacing="14" fill="#e4bd74">Club</text>
+  <text x="1366" y="2010" text-anchor="middle" font-family="system-ui, sans-serif" font-size="56" letter-spacing="12" fill="#cfe0d4">CRÉDITOS FICTÍCIOS</text>
+</svg>

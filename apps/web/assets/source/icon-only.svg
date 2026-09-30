@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PROVISÓRIO: ícone do app (1024×1024, sem transparência). Desenhado para este projeto; sem marcas de terceiros. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="felt" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="#187856"/><stop offset=".6" stop-color="#0a5d42"/><stop offset="1" stop-color="#06291e"/></radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#felt)"/>
+  <g transform="translate(512 512)">
+    <circle r="372" fill="#092019" opacity=".55" cy="14"/>
+    <circle r="360" fill="#b33337"/>
+    <circle r="360" fill="none" stroke="#f5e9cc" stroke-width="64" stroke-dasharray="94.2478 94.2478" transform="rotate(8)"/>
+    <circle r="318" fill="none" stroke="#f5e9cc" stroke-width="10"/>
+    <circle r="236" fill="#06291e" stroke="#e4bd74" stroke-width="14"/>
+    <text y="82" text-anchor="middle" font-family="Georgia, 'DejaVu Serif', serif" font-size="250" font-weight="700" fill="#e4bd74">21</text>
+  </g>
+</svg>

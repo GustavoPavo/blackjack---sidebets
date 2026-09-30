@@ -1,6 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createGuest, type PlayMode } from './api';
-import { loadIdentity, saveIdentity, type Identity } from './identity';
+import { apiConfigProblems } from './config';
+import { loadIdentity, loadIdentityNative, saveIdentity, type Identity } from './identity';
+import { isNative } from './native';
 import { NameForm } from './NameForm';
 import { PrefsProvider } from './prefs';
 import { TableScreen } from './TableScreen';
@@ -10,8 +12,28 @@ export function App() {
   const [identity, setIdentity] = useState<Identity | null>(() => loadIdentity());
   const [error, setError] = useState('');
   const [mode, setMode] = useState<PlayMode>('real');
+  // No app nativo a sessão pode estar só no armazenamento nativo (localStorage da WebView limpo).
+  const [booting, setBooting] = useState(() => !loadIdentity() && isNative());
+  useEffect(() => {
+    if (!booting) return;
+    loadIdentityNative().then((id) => { if (id) { saveIdentity(id); setIdentity(id); } }).finally(() => setBooting(false));
+  }, [booting]);
+  const configProblems = apiConfigProblems();
 
   const update = useCallback((next: Identity | null) => { saveIdentity(next); setIdentity(next); }, []);
+
+  if (configProblems.length) {
+    return (
+      <main className="app gate">
+        <div className="modal" role="alert">
+          <h2>App mal configurado</h2>
+          <ul>{configProblems.map((p) => <li key={p}>{p}</li>)}</ul>
+          <p className="muted">Gere o app novamente com a URL correta do servidor (docs/MOBILE.md).</p>
+        </div>
+      </main>
+    );
+  }
+  if (booting) return <main className="app gate"><p>Carregando…</p></main>;
 
   return (
     <PrefsProvider token={identity?.token}>

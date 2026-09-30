@@ -5,4 +5,5 @@ data/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
-.env.local
+*.local
+.DS_Store
