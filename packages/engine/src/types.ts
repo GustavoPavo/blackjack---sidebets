@@ -21,8 +21,17 @@ export type Action = 'hit' | 'stand' | 'double' | 'split' | 'surrender';
 export const ACTIONS: Action[] = ['hit', 'stand', 'double', 'split', 'surrender'];
 export type HandStatus = 'playing' | 'stood' | 'busted' | 'surrendered' | 'blackjack';
 
+/**
+ * Vocabulário: "lugar" (Seat) é uma das 5 posições da mesa; "mão" (Hand) é uma mão jogada num lugar
+ * (um lugar tem 1 mão, ou até 4 após splits); "jogador" (Player) é a pessoa dona da carteira.
+ * `Seat.index` é 0..4 (interno); o número exibido do lugar é `seatNumber(index)` = 1..5.
+ */
+export const seatNumber = (seatIndex: number) => seatIndex + 1;
+
 export interface Hand {
   cards: Card[];
+  /** Ordem global de saque de cada carta (mesma posição de `cards`); usado para animar a distribuição. */
+  seq: number[];
   bet: Cents;
   doubled: boolean;
   fromSplit: boolean;
@@ -51,12 +60,20 @@ export interface BetResult {
 
 export type InsuranceDecision = 'pending' | 'taken' | 'declined';
 
-export interface Seat {
-  index: number;
-  player: string | null;
+/** Jogador: identidade estável (id) + carteira única, compartilhada por todos os lugares que ele ocupa. */
+export interface Player {
+  id: string;
+  name: string;
   balance: Cents;
   ledger: LedgerEntry[];
+}
+
+export interface Seat {
+  index: number;
+  playerId: string | null;
   bets: Record<BetKind, Cents>;
+  /** Configuração inicial de apostas da última rodada jogada neste lugar (não inclui Double/Split/Insurance). */
+  lastBets: Record<BetKind, Cents> | null;
   confirmed: boolean;
   insurance: Cents;
   insuranceDecision: InsuranceDecision | null;
@@ -66,24 +83,29 @@ export interface Seat {
 }
 
 export type Command = { id: string } & (
-  | { type: 'buyIn'; seat: number; amount: number; name?: string }
-  | { type: 'rebuy'; seat: number; amount: number }
-  | { type: 'leave'; seat: number }
-  | { type: 'setBet'; seat: number; kind: BetKind; amount: number }
-  | { type: 'clearBets'; seat: number }
-  | { type: 'confirmBets'; seat: number }
-  | { type: 'editBets'; seat: number }
-  | { type: 'deal' }
-  | { type: 'insurance'; seat: number; take: boolean }
-  | { type: 'action'; seat: number; action: Action }
-  | { type: 'nextRound' }
+  | { type: 'setName'; playerId: string; name: string }
+  | { type: 'buyIn'; playerId: string; amount: number }
+  | { type: 'rebuy'; playerId: string; amount: number }
+  | { type: 'takeSeat'; playerId: string; seat: number }
+  | { type: 'leave'; playerId: string; seat: number }
+  | { type: 'setBet'; playerId: string; seat: number; kind: BetKind; amount: number }
+  | { type: 'repeatBets'; playerId: string; seat: number; multiplier: 1 | 2 }
+  | { type: 'clearBets'; playerId: string; seat: number }
+  | { type: 'confirmBets'; playerId: string; seat: number }
+  | { type: 'editBets'; playerId: string; seat: number }
+  | { type: 'deal'; playerId: string }
+  | { type: 'insurance'; playerId: string; seat: number; take: boolean }
+  | { type: 'action'; playerId: string; seat: number; action: Action }
+  | { type: 'nextRound'; playerId: string }
 );
 
 export type ErrorCode =
   | 'INVALID_COMMAND' | 'MISSING_COMMAND_ID' | 'WRONG_PHASE' | 'INVALID_SEAT' | 'SEAT_OCCUPIED'
   | 'SEAT_EMPTY' | 'INVALID_AMOUNT' | 'EXCEEDS_MAX_BUYIN' | 'BETS_CONFIRMED' | 'BETS_LOCKED'
   | 'BELOW_MIN_BET' | 'ODD_MAIN_BET' | 'NO_MAIN_BET' | 'INSUFFICIENT_FUNDS' | 'SEATS_NOT_CONFIRMED'
-  | 'NO_BETS' | 'NOT_YOUR_TURN' | 'ILLEGAL_ACTION' | 'NO_INSURANCE_PENDING';
+  | 'NO_BETS' | 'NOT_YOUR_TURN' | 'ILLEGAL_ACTION' | 'NO_INSURANCE_PENDING'
+  | 'INVALID_PLAYER' | 'UNKNOWN_PLAYER' | 'INVALID_NAME' | 'ALREADY_BOUGHT_IN' | 'NO_WALLET' | 'NO_BUYIN'
+  | 'NOT_SEAT_OWNER' | 'NO_PREVIOUS_BETS' | 'INVALID_MULTIPLIER';
 
 export type CommandResult =
   | { ok: true; duplicate?: boolean }

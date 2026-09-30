@@ -8,7 +8,7 @@ import { Shoe, type Rng } from './shoe';
 import {
   ACTIONS, BET_KINDS, RULES, RuleError,
   type Action, type BetKind, type BetResult, type Command, type CommandResult, type Hand,
-  type Phase, type ResultKind, type Seat,
+  type Phase, type Player, type ResultKind, type Seat,
 } from './types';
 
 export interface TableOptions {
@@ -18,21 +18,30 @@ export interface TableOptions {
   reshuffleBelow?: number;
 }
 
-const emptyBets = (): Record<BetKind, Cents> => ({ main: 0, twentyThree: 0, pairs: 0, buster: 0 });
+type Bets = Record<BetKind, Cents>;
+const emptyBets = (): Bets => ({ main: 0, twentyThree: 0, pairs: 0, buster: 0 });
+const sumBets = (b: Bets) => b.main + b.twentyThree + b.pairs + b.buster;
 const newSeat = (index: number): Seat => ({
-  index, player: null, balance: 0, ledger: [], bets: emptyBets(), confirmed: false,
+  index, playerId: null, bets: emptyBets(), lastBets: null, confirmed: false,
   insurance: 0, insuranceDecision: null, hands: [], splits: 0, results: [],
 });
+const MAX_NAME = 20;
 
 /**
- * Mesa de 5 lugares + dealer compartilhado. Autoridade única sobre baralho, turnos, saldos e
+ * Mesa de 5 lugares + dealer compartilhado. Autoridade única sobre baralho, turnos, carteiras e
  * pagamentos. Todas as mutações passam por `dispatch`, que valida antes de alterar o estado e
  * ignora comandos repetidos (mesmo `id`).
+ *
+ * Carteira: cada jogador (`Player`, id estável) tem UMA carteira, usada por todos os lugares que ele
+ * ocupa e por todas as suas mãos (inclusive splits). Apostas debitam a carteira ao serem feitas.
  *
  * Fluxo: BETTING → DEALING → (INSURANCE) → PLAYER_TURNS → DEALER_TURN → SETTLEMENT → BETTING.
  * DEALING e DEALER_TURN são transitórios (executam dentro de um único comando).
  *
- * Regras de liquidação (Ver docs/RULES.md):
+ * Ordem: os lugares são distribuídos e jogam na ordem 1 → 2 → 3 → 4 → 5 (índices 0..4).
+ * Distribuição: 1ª carta de cada lugar com aposta, 1ª do dealer (aberta), 2ª de cada lugar, 2ª do dealer (fechada).
+ *
+ * Liquidação (ver docs/RULES.md):
  *  - 23+1 e Pares: logo após a distribuição.
  *  - Insurance: quando o dealer revela a carta fechada (mesa sem "peek").
  *  - Buster Lucky e mãos principais: fim do turno do dealer.
@@ -41,9 +50,12 @@ export class Table {
   phase: Phase = 'BETTING';
   round = 1;
   seats: Seat[] = Array.from({ length: RULES.seats }, (_, i) => newSeat(i));
-  dealer: { cards: Card[]; holeHidden: boolean } = { cards: [], holeHidden: false };
+  players = new Map<string, Player>();
+  dealer: { cards: Card[]; seq: number[]; holeHidden: boolean } = { cards: [], seq: [], holeHidden: false };
   shoe: Shoe | null = null;
   log: string[] = [];
+  /** Contador global de cartas sacadas (dá a ordem de distribuição/animação). */
+  drawn = 0;
   private processed = new Map<string, CommandResult>();
   private rng: Rng;
   private shoeFactory: () => Shoe;
@@ -55,6 +67,14 @@ export class Table {
     this.shoeFactory = opts.shoeFactory ?? (() => Shoe.fresh(this.rng, RULES.decks));
     this.now = opts.now ?? (() => new Date());
     this.reshuffleBelow = opts.reshuffleBelow ?? RULES.reshuffleBelow;
+  }
+
+  // ------------------------------------------------------------ consultas
+  balanceOf(playerId: string): Cents { return this.players.get(playerId)?.balance ?? 0; }
+  seatsOf(playerId: string): Seat[] { return this.seats.filter((s) => s.playerId === playerId); }
+  playerAt(seatIndex: number): Player | null {
+    const id = this.seats[seatIndex]?.playerId;
+    return id ? this.players.get(id) ?? null : null;
   }
 
   // ------------------------------------------------------------ comandos
@@ -77,32 +97,46 @@ export class Table {
 
   private handle(cmd: Command) {
     switch (cmd.type) {
-      case 'buyIn': return this.buy(cmd.id, cmd.seat, cmd.amount, false, cmd.name);
-      case 'rebuy': return this.buy(cmd.id, cmd.seat, cmd.amount, true);
-      case 'leave': return this.leave(cmd.seat);
-      case 'setBet': return this.setBet(cmd.seat, cmd.kind, cmd.amount);
-      case 'clearBets': return this.clearBets(cmd.seat);
-      case 'confirmBets': return this.confirm(cmd.seat, true);
-      case 'editBets': return this.confirm(cmd.seat, false);
-      case 'deal': return this.deal();
-      case 'insurance': return this.insurance(cmd.seat, cmd.take);
-      case 'action': return this.act(cmd.seat, cmd.action);
-      case 'nextRound': return this.nextRound();
+      case 'setName': return this.setName(cmd.playerId, cmd.name);
+      case 'buyIn': return this.buy(cmd.id, cmd.playerId, cmd.amount, false);
+      case 'rebuy': return this.buy(cmd.id, cmd.playerId, cmd.amount, true);
+      case 'takeSeat': return this.takeSeat(cmd.playerId, cmd.seat);
+      case 'leave': return this.leave(cmd.playerId, cmd.seat);
+      case 'setBet': return this.setBet(cmd.playerId, cmd.seat, cmd.kind, cmd.amount);
+      case 'repeatBets': return this.repeatBets(cmd.playerId, cmd.seat, cmd.multiplier);
+      case 'clearBets': return this.clearBets(cmd.playerId, cmd.seat);
+      case 'confirmBets': return this.confirm(cmd.playerId, cmd.seat, true);
+      case 'editBets': return this.confirm(cmd.playerId, cmd.seat, false);
+      case 'deal': this.getPlayer(cmd.playerId); return this.deal();
+      case 'insurance': return this.insurance(cmd.playerId, cmd.seat, cmd.take);
+      case 'action': return this.act(cmd.playerId, cmd.seat, cmd.action);
+      case 'nextRound': this.getPlayer(cmd.playerId); return this.nextRound();
       default: throw new RuleError('INVALID_COMMAND', 'Comando desconhecido.');
     }
   }
 
   // ------------------------------------------------------------ helpers
-  private seat(i: unknown): Seat {
+  private getPlayer(id: unknown): Player {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 64) throw new RuleError('INVALID_PLAYER', 'Identificador de jogador inválido.');
+    const p = this.players.get(id);
+    if (!p) throw new RuleError('UNKNOWN_PLAYER', 'Jogador desconhecido: informe o nome primeiro.');
+    return p;
+  }
+  private seatAt(i: unknown): Seat {
     if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= RULES.seats)
       throw new RuleError('INVALID_SEAT', 'Lugar inválido.');
     return this.seats[i]!;
   }
-  private occupied(i: unknown): Seat {
-    const s = this.seat(i);
-    if (!s.player) throw new RuleError('SEAT_EMPTY', 'Lugar vazio.');
+  /** Lugar ocupado e pertencente ao jogador. */
+  private ownedSeat(playerId: unknown, i: unknown): Seat {
+    const s = this.seatAt(i);
+    if (!s.playerId) throw new RuleError('SEAT_EMPTY', 'Lugar vazio.');
+    const p = this.getPlayer(playerId);
+    if (s.playerId !== p.id) throw new RuleError('NOT_SEAT_OWNER', 'Este lugar pertence a outro jogador.');
     return s;
   }
+  private wallet(seat: Seat): Player { return this.players.get(seat.playerId!)!; }
+  private nameOf(seat: Seat) { return this.wallet(seat).name; }
   private need(phase: Phase) {
     if (this.phase !== phase) throw new RuleError('WRONG_PHASE', `Ação indisponível na fase ${this.phase}.`);
   }
@@ -110,51 +144,74 @@ export class Table {
     this.log.push(msg);
     if (this.log.length > 200) this.log.shift();
   }
-  private credit(seat: Seat, amount: Cents) { seat.balance += amount; }
+  private credit(seat: Seat, amount: Cents) { this.wallet(seat).balance += amount; }
   private record(seat: Seat, r: Omit<BetResult, 'net'>) {
     seat.results.push({ ...r, net: r.payout - r.stake });
   }
+  private drawTo(target: { cards: Card[]; seq: number[] }) {
+    target.cards.push(this.shoe!.draw());
+    target.seq.push(++this.drawn);
+  }
 
-  // ------------------------------------------------------------ buy-in / rebuy
-  private buy(commandId: string, i: number, amount: number, rebuy: boolean, name?: string) {
+  // ------------------------------------------------------------ jogador, buy-in / rebuy
+  /** Cria o jogador (carteira zerada) ou atualiza o nome. Nunca cria outra carteira nem apaga histórico. */
+  private setName(playerId: unknown, name: unknown) {
+    if (typeof playerId !== 'string' || playerId.length === 0 || playerId.length > 64)
+      throw new RuleError('INVALID_PLAYER', 'Identificador de jogador inválido.');
+    const n = typeof name === 'string' ? name.trim().slice(0, MAX_NAME) : '';
+    if (!n) throw new RuleError('INVALID_NAME', 'Informe um nome.');
+    const p = this.players.get(playerId);
+    if (p) { this.say(`${p.name} agora se chama ${n}.`); p.name = n; }
+    else this.players.set(playerId, { id: playerId, name: n, balance: 0, ledger: [] });
+  }
+
+  /** Buy-in inicial (uma vez) ou rebuy, sempre na carteira do jogador. Máx. R$ 1.000,00 por operação. */
+  private buy(commandId: string, playerId: unknown, amount: number, rebuy: boolean) {
     this.need('BETTING');
-    const s = this.seat(i);
-    const bad = validateBuyAmount(amount);
+    const p = this.getPlayer(playerId);
     if (rebuy) {
-      if (!s.player) throw new RuleError('SEAT_EMPTY', 'Rebuy só é possível em lugar ocupado.');
-      if (s.confirmed) throw new RuleError('BETS_CONFIRMED', 'Rebuy não é permitido após confirmar as apostas.');
-    } else if (s.player) throw new RuleError('SEAT_OCCUPIED', 'Lugar já ocupado.');
+      if (p.ledger.length === 0) throw new RuleError('NO_WALLET', 'Faça o buy-in inicial antes de um rebuy.');
+      if (this.seatsOf(p.id).some((s) => s.confirmed))
+        throw new RuleError('BETS_CONFIRMED', 'Rebuy não é permitido após confirmar as apostas.');
+    } else if (p.ledger.length > 0) throw new RuleError('ALREADY_BOUGHT_IN', 'O buy-in inicial já foi feito; use rebuy.');
+    const bad = validateBuyAmount(amount);
     if (bad === 'INVALID_AMOUNT') throw new RuleError('INVALID_AMOUNT', 'Valor deve ser um inteiro positivo em centavos.');
     if (bad === 'EXCEEDS_MAX_BUYIN')
       throw new RuleError('EXCEEDS_MAX_BUYIN', `Máximo de ${formatBRL(RULES.maxBuy)} por operação.`);
-    if (!rebuy) {
-      const n = typeof name === 'string' ? name.trim().slice(0, 20) : '';
-      s.player = n || `Jogador ${i + 1}`;
-    }
-    s.balance += amount;
-    s.ledger.push({
-      commandId, type: rebuy ? 'rebuy' : 'buyIn', amount, at: this.now().toISOString(), balanceAfter: s.balance,
+    p.balance += amount;
+    p.ledger.push({
+      commandId, type: rebuy ? 'rebuy' : 'buyIn', amount, at: this.now().toISOString(), balanceAfter: p.balance,
     });
-    this.say(`${s.player}: ${rebuy ? 'rebuy' : 'buy-in'} de ${formatBRL(amount)} (créditos fictícios).`);
+    this.say(`${p.name}: ${rebuy ? 'rebuy' : 'buy-in'} de ${formatBRL(amount)} (créditos fictícios).`);
   }
 
-  /** Libera o lugar. Os créditos são fictícios: não há saque, o saldo é descartado. */
-  private leave(i: number) {
+  private takeSeat(playerId: unknown, i: unknown) {
     this.need('BETTING');
-    const s = this.occupied(i);
+    const s = this.seatAt(i);
+    const p = this.getPlayer(playerId);
+    if (s.playerId) throw new RuleError('SEAT_OCCUPIED', 'Lugar já ocupado.');
+    if (p.ledger.length === 0) throw new RuleError('NO_BUYIN', 'Faça o buy-in inicial para ocupar um lugar.');
+    s.playerId = p.id;
+    this.say(`${p.name} ocupou o lugar ${s.index + 1}.`);
+  }
+
+  /** Libera o lugar e devolve à carteira as apostas ainda não jogadas. A carteira permanece. */
+  private leave(playerId: unknown, i: unknown) {
+    this.need('BETTING');
+    const s = this.ownedSeat(playerId, i);
     this.refundBets(s, BET_KINDS);
-    this.say(`${s.player} deixou o lugar ${i + 1}.`);
-    this.seats[i] = newSeat(i);
+    this.say(`${this.nameOf(s)} deixou o lugar ${s.index + 1}.`);
+    this.seats[s.index] = newSeat(s.index);
   }
 
   // ------------------------------------------------------------ apostas
   private refundBets(s: Seat, kinds: BetKind[]) {
-    for (const k of kinds) { s.balance += s.bets[k]; s.bets[k] = 0; }
+    for (const k of kinds) { this.credit(s, s.bets[k]); s.bets[k] = 0; }
   }
 
-  private setBet(i: number, kind: BetKind, amount: number) {
+  private setBet(playerId: unknown, i: unknown, kind: BetKind, amount: number) {
     this.need('BETTING');
-    const s = this.occupied(i);
+    const s = this.ownedSeat(playerId, i);
     if (!BET_KINDS.includes(kind)) throw new RuleError('INVALID_COMMAND', 'Tipo de aposta inválido.');
     if (s.confirmed) throw new RuleError('BETS_LOCKED', 'Apostas confirmadas: edite antes de alterar.');
     if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0)
@@ -171,22 +228,51 @@ export class Table {
       if (s.bets.main <= 0) throw new RuleError('NO_MAIN_BET', 'Side bets exigem uma aposta principal válida no mesmo lugar.');
       if (amount < RULES.minSide) throw new RuleError('BELOW_MIN_BET', `Side bet mínima: ${formatBRL(RULES.minSide)}.`);
     }
+    const w = this.wallet(s);
     const delta = amount - s.bets[kind];
-    if (delta > s.balance) throw new RuleError('INSUFFICIENT_FUNDS', 'Saldo insuficiente.');
-    s.balance -= delta;
+    if (delta > w.balance) throw new RuleError('INSUFFICIENT_FUNDS', 'Saldo insuficiente.');
+    w.balance -= delta;
     s.bets[kind] = amount;
   }
 
-  private clearBets(i: number) {
+  /**
+   * "Repetir aposta" (×1) e "X2" (×2): SUBSTITUI as apostas atuais do lugar pela configuração inicial da
+   * última rodada. Tudo ou nada: valida mínimos e a carteira compartilhada antes de mudar qualquer coisa.
+   * Repetir o comando não debita de novo (o resultado é sempre o mesmo estado).
+   */
+  private repeatBets(playerId: unknown, i: unknown, multiplier: unknown) {
     this.need('BETTING');
-    const s = this.occupied(i);
+    const s = this.ownedSeat(playerId, i);
+    if (s.confirmed) throw new RuleError('BETS_LOCKED', 'Apostas confirmadas: edite antes de repetir.');
+    if (multiplier !== 1 && multiplier !== 2) throw new RuleError('INVALID_MULTIPLIER', 'Multiplicador inválido.');
+    if (!s.lastBets) throw new RuleError('NO_PREVIOUS_BETS', 'Este lugar ainda não tem uma aposta anterior.');
+    const target = emptyBets();
+    for (const k of BET_KINDS) target[k] = s.lastBets[k] * multiplier;
+    if (target.main < RULES.minMain) throw new RuleError('BELOW_MIN_BET', `Aposta principal mínima: ${formatBRL(RULES.minMain)}.`);
+    if (target.main % 2 !== 0) throw new RuleError('ODD_MAIN_BET', 'A aposta principal deve ter centavos pares.');
+    for (const k of ['twentyThree', 'pairs', 'buster'] as const) {
+      if (target[k] > 0 && target.main <= 0) throw new RuleError('NO_MAIN_BET', 'Side bets exigem aposta principal.');
+      if (target[k] > 0 && target[k] < RULES.minSide) throw new RuleError('BELOW_MIN_BET', `Side bet mínima: ${formatBRL(RULES.minSide)}.`);
+    }
+    const w = this.wallet(s);
+    const available = w.balance + sumBets(s.bets); // as apostas atuais deste lugar voltam à carteira ao serem substituídas
+    const needed = sumBets(target);
+    if (needed > available)
+      throw new RuleError('INSUFFICIENT_FUNDS', `Saldo insuficiente para ${multiplier === 2 ? 'X2' : 'repetir a aposta'}: são necessários ${formatBRL(needed)} e há ${formatBRL(available)} disponíveis. Suas apostas atuais foram mantidas.`);
+    w.balance = available - needed;
+    s.bets = target;
+  }
+
+  private clearBets(playerId: unknown, i: unknown) {
+    this.need('BETTING');
+    const s = this.ownedSeat(playerId, i);
     if (s.confirmed) throw new RuleError('BETS_LOCKED', 'Apostas confirmadas: edite antes de limpar.');
     this.refundBets(s, BET_KINDS);
   }
 
-  private confirm(i: number, value: boolean) {
+  private confirm(playerId: unknown, i: unknown, value: boolean) {
     this.need('BETTING');
-    const s = this.occupied(i);
+    const s = this.ownedSeat(playerId, i);
     if (value && s.bets.main < RULES.minMain)
       throw new RuleError('NO_MAIN_BET', 'Faça uma aposta principal válida antes de confirmar.');
     s.confirmed = value;
@@ -195,7 +281,7 @@ export class Table {
   // ------------------------------------------------------------ distribuição
   private deal() {
     this.need('BETTING');
-    const active = this.seats.filter((s) => s.player && s.bets.main > 0);
+    const active = this.seats.filter((s) => s.playerId && s.bets.main > 0);
     if (active.some((s) => !s.confirmed)) throw new RuleError('SEATS_NOT_CONFIRMED', 'Há lugares com apostas não confirmadas.');
     if (active.length === 0) throw new RuleError('NO_BETS', 'Nenhuma aposta confirmada.');
 
@@ -203,16 +289,18 @@ export class Table {
       this.shoe = this.shoeFactory();
       this.say('Novo shoe de 6 baralhos embaralhado.');
     }
-    const shoe = this.shoe;
     this.phase = 'DEALING';
     for (const s of active) {
-      s.hands = [{ cards: [], bet: s.bets.main, doubled: false, fromSplit: false, fromAces: false, status: 'playing' }];
+      s.lastBets = { ...s.bets }; // configuração inicial: Double/Split/Insurance não entram aqui
+      s.hands = [{ cards: [], seq: [], bet: s.bets.main, doubled: false, fromSplit: false, fromAces: false, status: 'playing' }];
     }
-    for (const s of active) s.hands[0]!.cards.push(shoe.draw());
-    const up = shoe.draw();
-    for (const s of active) s.hands[0]!.cards.push(shoe.draw());
-    const hole = shoe.draw();
-    this.dealer = { cards: [up, hole], holeHidden: true };
+    this.dealer = { cards: [], seq: [], holeHidden: true };
+    // Ordem: 1ª carta de cada lugar (1→5), 1ª do dealer, 2ª de cada lugar, carta fechada do dealer.
+    for (const s of active) this.drawTo(s.hands[0]!);
+    this.drawTo(this.dealer);
+    for (const s of active) this.drawTo(s.hands[0]!);
+    this.drawTo(this.dealer);
+    const up = this.dealer.cards[0]!;
 
     for (const s of active) {
       const h = s.hands[0]!;
@@ -234,7 +322,7 @@ export class Table {
     if (up.rank === 'A') {
       this.phase = 'INSURANCE';
       for (const s of active) {
-        s.insuranceDecision = s.balance >= s.bets.main / 2 ? 'pending' : 'declined';
+        s.insuranceDecision = this.wallet(s).balance >= s.bets.main / 2 ? 'pending' : 'declined';
       }
       this.maybeStartTurns();
     } else {
@@ -243,15 +331,16 @@ export class Table {
   }
 
   // ------------------------------------------------------------ insurance
-  private insurance(i: number, take: boolean) {
+  private insurance(playerId: unknown, i: unknown, take: boolean) {
     this.need('INSURANCE');
-    const s = this.occupied(i);
+    const s = this.ownedSeat(playerId, i);
     if (s.insuranceDecision !== 'pending') throw new RuleError('NO_INSURANCE_PENDING', 'Sem decisão de insurance pendente neste lugar.');
     if (typeof take !== 'boolean') throw new RuleError('INVALID_COMMAND', 'Valor inválido.');
     if (take) {
       const amt = s.bets.main / 2; // único valor permitido: metade da aposta principal
-      if (s.balance < amt) throw new RuleError('INSUFFICIENT_FUNDS', 'Saldo insuficiente para insurance.');
-      s.balance -= amt;
+      const w = this.wallet(s);
+      if (w.balance < amt) throw new RuleError('INSUFFICIENT_FUNDS', 'Saldo insuficiente para insurance.');
+      w.balance -= amt;
       s.insurance = amt;
       s.insuranceDecision = 'taken';
     } else {
@@ -271,7 +360,7 @@ export class Table {
   }
 
   // ------------------------------------------------------------ turnos
-  /** Primeira mão 'playing' em ordem de lugar/mão. */
+  /** Primeira mão 'playing' em ordem de lugar (1→5) e, dentro do lugar, de mão. */
   currentTurn(): { seat: Seat; hand: Hand; index: number } | null {
     if (this.phase !== 'PLAYER_TURNS') return null;
     for (const seat of this.seats)
@@ -288,12 +377,13 @@ export class Table {
 
   legalFor(seat: Seat, hand: Hand): Action[] {
     if (hand.status !== 'playing') return [];
+    const funds = this.wallet(seat).balance >= hand.bet; // carteira compartilhada entre lugares e mãos
     const two = hand.cards.length === 2;
     const legal: Action[] = [];
-    const canSplit = two && this.canSplitCards(hand) && seat.splits < RULES.maxSplits && seat.balance >= hand.bet;
+    const canSplit = two && this.canSplitCards(hand) && seat.splits < RULES.maxSplits && funds;
     if (!hand.fromAces) {
       legal.push('hit', 'stand');
-      if (two && seat.balance >= hand.bet) legal.push('double');
+      if (two && funds) legal.push('double');
       if (canSplit) legal.push('split');
       if (two && !hand.fromSplit && seat.splits === 0 && seat.hands.length === 1) legal.push('surrender');
     } else {
@@ -324,42 +414,46 @@ export class Table {
     this.dealerTurn();
   }
 
-  private act(i: number, action: Action) {
+  private act(playerId: unknown, i: unknown, action: Action) {
     this.need('PLAYER_TURNS');
-    const s = this.occupied(i);
+    const s = this.ownedSeat(playerId, i);
     if (!ACTIONS.includes(action)) throw new RuleError('INVALID_COMMAND', 'Ação inválida.');
     const t = this.currentTurn();
     if (!t || t.seat.index !== s.index) throw new RuleError('NOT_YOUR_TURN', 'Não é a vez deste lugar.');
     if (!this.legalFor(t.seat, t.hand).includes(action))
       throw new RuleError('ILLEGAL_ACTION', `Ação "${action}" não permitida nesta mão.`);
     const { seat, hand, index } = t;
-    const shoe = this.shoe!;
+    const w = this.wallet(seat);
     switch (action) {
       case 'hit':
-        hand.cards.push(shoe.draw());
+        this.drawTo(hand);
         this.normalize(seat, hand);
         break;
       case 'stand':
         hand.status = 'stood';
         break;
       case 'double':
-        seat.balance -= hand.bet;
+        w.balance -= hand.bet;
         hand.bet *= 2;
         hand.doubled = true;
-        hand.cards.push(shoe.draw());
+        this.drawTo(hand);
         hand.status = handValue(hand.cards).bust ? 'busted' : 'stood';
         break;
       case 'split': {
-        seat.balance -= hand.bet;
+        w.balance -= hand.bet;
         seat.splits++;
         const [c1, c2] = hand.cards as [Card, Card];
+        const [s1, s2] = hand.seq as [number, number];
         const aces = c1.rank === 'A';
-        hand.cards = [c1, shoe.draw()];
+        hand.cards = [c1];
+        hand.seq = [s1];
+        this.drawTo(hand);
         hand.fromSplit = true;
         hand.fromAces = aces;
         const h2: Hand = {
-          cards: [c2, shoe.draw()], bet: hand.bet, doubled: false, fromSplit: true, fromAces: aces, status: 'playing',
+          cards: [c2], seq: [s2], bet: hand.bet, doubled: false, fromSplit: true, fromAces: aces, status: 'playing',
         };
+        this.drawTo(h2);
         seat.hands.splice(index + 1, 0, h2);
         this.normalize(seat, hand);
         this.normalize(seat, h2);
@@ -380,7 +474,6 @@ export class Table {
   private dealerTurn() {
     this.phase = 'DEALER_TURN';
     this.dealer.holeHidden = false;
-    const shoe = this.shoe!;
     const dv0 = handValue(this.dealer.cards);
     const dealerBJ = this.dealer.cards.length === 2 && dv0.total === 21;
     const inRound = this.seats.filter((s) => s.hands.length > 0);
@@ -401,7 +494,7 @@ export class Table {
     const anyBuster = inRound.some((s) => s.bets.buster > 0);
     if (!dealerBJ && (anyLive || anyBuster)) {
       // Dealer para no soft 17: só compra com total < 17.
-      while (handValue(this.dealer.cards).total < 17) this.dealer.cards.push(shoe.draw());
+      while (handValue(this.dealer.cards).total < 17) this.drawTo(this.dealer);
     }
     const dv = handValue(this.dealer.cards);
     this.phase = 'SETTLEMENT';
@@ -446,7 +539,7 @@ export class Table {
   private nextRound() {
     this.need('SETTLEMENT');
     for (const s of this.seats) {
-      s.bets = emptyBets();
+      s.bets = emptyBets(); // `lastBets` e o ocupante permanecem
       s.confirmed = false;
       s.insurance = 0;
       s.insuranceDecision = null;
@@ -454,7 +547,7 @@ export class Table {
       s.splits = 0;
       s.results = [];
     }
-    this.dealer = { cards: [], holeHidden: false };
+    this.dealer = { cards: [], seq: [], holeHidden: false };
     this.round++;
     this.phase = 'BETTING';
   }

@@ -5,5 +5,6 @@ export * from './hand';
 export * from './busterLucky';
 export * from './sideBets';
 export * from './types';
+export * from './roundMessage';
 export * from './table';
 export * from './view';

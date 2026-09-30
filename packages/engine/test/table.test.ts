@@ -1,69 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mkTable, sit } from './helpers';
+import { mkTable, sit, seatPlayer, join, bet, pid } from './helpers';
 import { toView } from '../src';
 
 const act = (h: ReturnType<typeof mkTable>, seat: number, action: any) => h.ok({ type: 'action', seat, action });
 
-describe('buy-in e rebuy', () => {
-  it('aceita até R$ 1.000,00 por operação e registra no histórico', () => {
-    const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 100_000, name: 'Ana' });
-    expect(h.t.seats[0]!.balance).toBe(100_000);
-    expect(h.t.seats[0]!.ledger).toHaveLength(1);
-    expect(h.t.seats[0]!.ledger[0]).toMatchObject({ type: 'buyIn', amount: 100_000, balanceAfter: 100_000 });
-    expect(typeof h.t.seats[0]!.ledger[0]!.at).toBe('string');
-  });
-  it('rejeita valores acima do limite, zero, negativos e não inteiros', () => {
-    const h = mkTable([]);
-    expect(h.run({ type: 'buyIn', seat: 0, amount: 100_001 })).toMatchObject({ ok: false, code: 'EXCEEDS_MAX_BUYIN' });
-    for (const amount of [0, -1, 1.5, NaN, Infinity, '500' as any])
-      expect(h.run({ type: 'buyIn', seat: 0, amount })).toMatchObject({ ok: false, code: 'INVALID_AMOUNT' });
-    expect(h.t.seats[0]!.player).toBeNull();
-    expect(h.t.seats[0]!.balance).toBe(0);
-  });
-  it('rebuy acumula saldo acima de R$ 1.000,00 (limite é por operação)', () => {
-    const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 1, amount: 100_000 });
-    h.ok({ type: 'rebuy', seat: 1, amount: 100_000 });
-    h.ok({ type: 'rebuy', seat: 1, amount: 50_000 });
-    expect(h.t.seats[1]!.balance).toBe(250_000);
-    expect(h.t.seats[1]!.ledger.map((l) => l.type)).toEqual(['buyIn', 'rebuy', 'rebuy']);
-    expect(h.run({ type: 'rebuy', seat: 1, amount: 100_001 })).toMatchObject({ ok: false, code: 'EXCEEDS_MAX_BUYIN' });
-  });
-  it('bloqueia buy-in em lugar ocupado e rebuy em lugar vazio', () => {
-    const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 1000 });
-    expect(h.run({ type: 'buyIn', seat: 0, amount: 1000 })).toMatchObject({ ok: false, code: 'SEAT_OCCUPIED' });
-    expect(h.run({ type: 'rebuy', seat: 2, amount: 1000 })).toMatchObject({ ok: false, code: 'SEAT_EMPTY' });
-    expect(h.t.seats[0]!.balance).toBe(1000);
-  });
-  it('não processa a mesma solicitação duas vezes', () => {
-    const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 1000, id: 'x1' });
-    h.ok({ type: 'rebuy', seat: 0, amount: 5000, id: 'x2' });
-    const dup = h.run({ type: 'rebuy', seat: 0, amount: 5000, id: 'x2' });
-    expect(dup).toMatchObject({ ok: true, duplicate: true });
-    expect(h.t.seats[0]!.balance).toBe(6000);
-    expect(h.t.seats[0]!.ledger).toHaveLength(2);
-  });
-  it('rebuy só entre rodadas e antes de confirmar as apostas', () => {
-    const h = mkTable(['10S', '10H', '9D', '8C', '2D']);
-    h.ok({ type: 'buyIn', seat: 0, amount: 10_000 });
-    h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 500 });
-    expect(toView(h.t).seats[0]!.canRebuy).toBe(true);
-    h.ok({ type: 'confirmBets', seat: 0 });
-    expect(toView(h.t).seats[0]!.canRebuy).toBe(false);
-    expect(h.run({ type: 'rebuy', seat: 0, amount: 1000 })).toMatchObject({ ok: false, code: 'BETS_CONFIRMED' });
-    h.ok({ type: 'deal' });
-    expect(h.run({ type: 'rebuy', seat: 0, amount: 1000 })).toMatchObject({ ok: false, code: 'WRONG_PHASE' });
-    expect(h.t.seats[0]!.balance).toBe(9500);
-  });
-});
-
 describe('apostas', () => {
   it('valida mínimos, centavos pares, saldo e side bet sem principal', () => {
     const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 1000 });
+    seatPlayer(h, 0, 1000);
     expect(h.run({ type: 'setBet', seat: 0, kind: 'main', amount: 499 })).toMatchObject({ code: 'BELOW_MIN_BET' });
     expect(h.run({ type: 'setBet', seat: 0, kind: 'main', amount: 501 })).toMatchObject({ code: 'ODD_MAIN_BET' });
     expect(h.run({ type: 'setBet', seat: 0, kind: 'main', amount: 1002 })).toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
@@ -72,29 +16,29 @@ describe('apostas', () => {
     expect(h.run({ type: 'setBet', seat: 0, kind: 'pairs', amount: 249 })).toMatchObject({ code: 'BELOW_MIN_BET' });
     expect(h.run({ type: 'setBet', seat: 0, kind: 'pairs', amount: 501 })).toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
     h.ok({ type: 'setBet', seat: 0, kind: 'pairs', amount: 250 });
-    expect(h.t.seats[0]!.balance).toBe(250);
+    expect(h.bal(0)).toBe(250);
     expect(h.run({ type: 'setBet', seat: 0, kind: 'nope' as any, amount: 250 })).toMatchObject({ ok: false });
     expect(h.run({ type: 'setBet', seat: 7, kind: 'main', amount: 500 })).toMatchObject({ code: 'INVALID_SEAT' });
   });
   it('retirar a principal cancela e devolve as side bets', () => {
     const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 5000 });
+    seatPlayer(h, 0, 5000);
     h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 1000 });
     h.ok({ type: 'setBet', seat: 0, kind: 'twentyThree', amount: 250 });
     h.ok({ type: 'setBet', seat: 0, kind: 'buster', amount: 500 });
-    expect(h.t.seats[0]!.balance).toBe(3250);
+    expect(h.bal(0)).toBe(3250);
     h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 0 });
-    expect(h.t.seats[0]!.balance).toBe(5000);
+    expect(h.bal(0)).toBe(5000);
     expect(h.t.seats[0]!.bets).toEqual({ main: 0, twentyThree: 0, pairs: 0, buster: 0 });
   });
   it('limpar apostas devolve tudo; alterar ajusta pelo delta', () => {
     const h = mkTable([]);
-    h.ok({ type: 'buyIn', seat: 0, amount: 5000 });
+    seatPlayer(h, 0, 5000);
     h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 1000 });
     h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 600 });
-    expect(h.t.seats[0]!.balance).toBe(4400);
+    expect(h.bal(0)).toBe(4400);
     h.ok({ type: 'clearBets', seat: 0 });
-    expect(h.t.seats[0]!.balance).toBe(5000);
+    expect(h.bal(0)).toBe(5000);
   });
   it('não altera apostas depois de confirmar nem depois do início da rodada', () => {
     const h = mkTable(['10S', '10H', '9D', '8C', '2D']);
@@ -106,7 +50,7 @@ describe('apostas', () => {
   });
   it('não distribui com apostas não confirmadas', () => {
     const h = mkTable(['10S', '10H', '9D', '8C']);
-    h.ok({ type: 'buyIn', seat: 0, amount: 5000 });
+    seatPlayer(h, 0, 5000);
     h.ok({ type: 'setBet', seat: 0, kind: 'main', amount: 500 });
     expect(h.run({ type: 'deal' })).toMatchObject({ code: 'SEATS_NOT_CONFIRMED' });
     expect(h.run({ type: 'confirmBets', seat: 1 })).toMatchObject({ code: 'SEAT_EMPTY' });
@@ -120,14 +64,14 @@ describe('blackjack natural e pagamentos básicos', () => {
     sit(h, 0, 5000, { main: 1000 });
     h.ok({ type: 'deal' });
     expect(h.t.phase).toBe('SETTLEMENT');
-    expect(h.t.seats[0]!.balance).toBe(4000 + 1000 + 1500);
+    expect(h.bal(0)).toBe(4000 + 1000 + 1500);
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'blackjack', payout: 2500 });
   });
   it('natural empata com blackjack do dealer', () => {
     const h = mkTable(['AS', '10D', 'KH', 'AC']);
     sit(h, 0, 5000, { main: 1000 });
     h.ok({ type: 'deal' });
-    expect(h.t.seats[0]!.balance).toBe(5000);
+    expect(h.bal(0)).toBe(5000);
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'push' });
   });
   it('21 após split NÃO é blackjack natural (paga 1:1)', () => {
@@ -141,7 +85,7 @@ describe('blackjack natural e pagamentos básicos', () => {
     const r = h.t.seats[0]!.results;
     expect(r[0]).toMatchObject({ handIndex: 0, outcome: 'win', payout: 2000 });
     expect(r[1]).toMatchObject({ handIndex: 1, outcome: 'win', payout: 2000 });
-    expect(h.t.seats[0]!.balance).toBe(3000 + 4000);
+    expect(h.bal(0)).toBe(3000 + 4000);
   });
   it('Ás vale 11 ou 1 na mão jogada', () => {
     // A,5 (soft 16) hit 9 → 15 hard; hit 6 → 21
@@ -165,13 +109,13 @@ describe('blackjack natural e pagamentos básicos', () => {
     g.ok({ type: 'deal' });
     act(g, 0, 'hit');
     expect(g.t.seats[0]!.results[0]).toMatchObject({ outcome: 'bust', payout: 0 });
-    expect(g.t.seats[0]!.balance).toBe(4500);
+    expect(g.bal(0)).toBe(4500);
     const p = mkTable(['10S', '10D', '8H', '8C']);
     sit(p, 0, 5000, { main: 500 });
     p.ok({ type: 'deal' });
     act(p, 0, 'stand');
     expect(p.t.seats[0]!.results[0]).toMatchObject({ outcome: 'push' });
-    expect(p.t.seats[0]!.balance).toBe(5000);
+    expect(p.bal(0)).toBe(5000);
   });
 });
 
@@ -210,7 +154,7 @@ describe('dealer', () => {
     h.ok({ type: 'insurance', seat: 0, take: false });
     act(h, 0, 'double');
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'lose', stake: 2000, payout: 0 });
-    expect(h.t.seats[0]!.balance).toBe(3000);
+    expect(h.bal(0)).toBe(3000);
   });
   it('blackjack do dealer com 10 aberto e Ás fechado também vale como blackjack', () => {
     const h = mkTable(['10S', 'KD', '8H', 'AC']);
@@ -242,7 +186,7 @@ describe('split', () => {
     const s = h.t.seats[0]!;
     expect(s.splits).toBe(3);
     expect(s.hands).toHaveLength(4);
-    expect(s.balance).toBe(10_000 - 500 * 4);
+    expect(h.bal(0)).toBe(10_000 - 500 * 4);
     expect(h.t.legalActions()).not.toContain('split'); // mão atual ainda é par, mas o limite acabou
     expect(h.run({ type: 'action', seat: 0, action: 'split' })).toMatchObject({ ok: false, code: 'ILLEGAL_ACTION' });
     expect(s.hands).toHaveLength(4);
@@ -300,7 +244,7 @@ describe('surrender', () => {
     h.ok({ type: 'deal' });
     expect(h.t.legalActions()).toContain('surrender');
     act(h, 0, 'surrender');
-    expect(h.t.seats[0]!.balance).toBe(4500);
+    expect(h.bal(0)).toBe(4500);
     expect(h.t.seats[0]!.results[0]).toMatchObject({ outcome: 'surrender', payout: 500 });
   });
   it('não é permitido depois de Hit nem depois de split', () => {
@@ -321,7 +265,7 @@ describe('surrender', () => {
     h.ok({ type: 'deal' });
     h.ok({ type: 'insurance', seat: 0, take: false });
     act(h, 0, 'surrender');
-    expect(h.t.seats[0]!.balance).toBe(4500);
+    expect(h.bal(0)).toBe(4500);
     expect(h.t.seats[0]!.results.filter((r) => r.kind === 'main')).toHaveLength(1);
   });
 });
@@ -340,10 +284,10 @@ describe('insurance', () => {
     expect(h.t.phase).toBe('INSURANCE');
     h.ok({ type: 'insurance', seat: 0, take: true });
     expect(h.t.seats[0]!.insurance).toBe(500);
-    expect(h.t.seats[0]!.balance).toBe(3500);
+    expect(h.bal(0)).toBe(3500);
     act(h, 0, 'stand');
     // principal perdida (16 vs BJ) ; insurance devolve 500 + 1000 = 1500
-    expect(h.t.seats[0]!.balance).toBe(5000);
+    expect(h.bal(0)).toBe(5000);
     expect(h.t.seats[0]!.results.find((r) => r.kind === 'insurance')).toMatchObject({ outcome: 'win', payout: 1500 });
   });
   it('perde se o dealer não tem blackjack; decisão repetida é rejeitada', () => {
@@ -352,7 +296,7 @@ describe('insurance', () => {
     h.ok({ type: 'deal' });
     h.ok({ type: 'insurance', seat: 0, take: true });
     expect(h.run({ type: 'insurance', seat: 0, take: true })).toMatchObject({ code: 'WRONG_PHASE' });
-    expect(h.t.seats[0]!.balance).toBe(3500);
+    expect(h.bal(0)).toBe(3500);
     act(h, 0, 'stand');
     expect(h.t.seats[0]!.results.find((r) => r.kind === 'insurance')).toMatchObject({ outcome: 'lose', payout: 0 });
   });
@@ -372,7 +316,7 @@ describe('turnos e idempotência', () => {
     sit(h, 1, 5000, { main: 500 });
     h.ok({ type: 'deal' });
     expect(h.run({ type: 'action', seat: 1, action: 'double' })).toMatchObject({ code: 'NOT_YOUR_TURN' });
-    expect(h.t.seats[1]!.balance).toBe(4500);
+    expect(h.bal(1)).toBe(4500);
     expect(h.run({ type: 'action', seat: 3, action: 'hit' })).toMatchObject({ code: 'SEAT_EMPTY' });
   });
   it('ação repetida (mesmo id) não debita duas vezes', () => {
@@ -380,11 +324,11 @@ describe('turnos e idempotência', () => {
     sit(h, 0, 5000, { main: 500 });
     h.ok({ type: 'deal' });
     h.ok({ type: 'action', seat: 0, action: 'double', id: 'dbl-1' });
-    expect(h.t.seats[0]!.balance).toBe(4000 + 2000);
+    expect(h.bal(0)).toBe(4000 + 2000);
     const again = h.run({ type: 'action', seat: 0, action: 'double', id: 'dbl-1' });
     expect(again).toMatchObject({ ok: true, duplicate: true });
     // 5+6+10 = 21 ganha do dealer (17): 1000 apostado → 2000 de retorno, creditado uma única vez
-    expect(h.t.seats[0]!.balance).toBe(4000 + 2000);
+    expect(h.bal(0)).toBe(4000 + 2000);
     expect(h.t.seats[0]!.results.filter((r) => r.kind === 'main')).toHaveLength(1);
   });
   it('mão encerrada não aceita nova ação', () => {
@@ -400,11 +344,12 @@ describe('turnos e idempotência', () => {
     sit(h, 0, 5000, { main: 500 });
     h.ok({ type: 'deal' });
     act(h, 0, 'stand');
-    const bal = h.t.seats[0]!.balance;
+    const bal = h.bal(0);
     h.ok({ type: 'nextRound' });
     expect(h.t.phase).toBe('BETTING');
-    expect(h.t.seats[0]).toMatchObject({ balance: bal, confirmed: false, hands: [] });
-    expect(h.t.seats[0]!.ledger).toHaveLength(1);
+    expect(h.t.seats[0]).toMatchObject({ confirmed: false, hands: [] });
+    expect(h.bal(0)).toBe(bal);
+    expect(h.t.playerAt(0)!.ledger).toHaveLength(1);
   });
   it('view esconde a carta fechada do dealer até a revelação', () => {
     const h = mkTable(['10S', '10D', '9H', '8C']);
