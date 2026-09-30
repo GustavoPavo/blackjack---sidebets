@@ -44,7 +44,7 @@ export function SeatActions({ seat, withLeave = true }: { seat: SeatView; withLe
         </>
       )}
       {seat.canEditBets && <button className="ghost" disabled={busy} onClick={() => cmd({ type: 'clearBets', seat: seat.index })}>Limpar</button>}
-      {seat.canConfirm && <button disabled={busy} onClick={() => cmd({ type: 'confirmBets', seat: seat.index })}>Confirmar apostas</button>}
+      {seat.canConfirm && <button className="btn-confirm" disabled={busy} onClick={() => cmd({ type: 'confirmBets', seat: seat.index })}>Confirmar apostas</button>}
       {seat.confirmed && <><span className="ok">Apostas confirmadas</span><button className="ghost" disabled={busy} onClick={() => cmd({ type: 'editBets', seat: seat.index })}>Editar</button></>}
       {withLeave && seat.canLeave && <button className="ghost" disabled={busy} onClick={() => cmd({ type: 'leave', seat: seat.index })}>Sair do lugar</button>}
     </div>

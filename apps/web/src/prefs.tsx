@@ -21,8 +21,10 @@ export interface PrefsApi {
   setPrefs: (patch: Partial<Preferences>) => void;
   /** Movimento reduzido já resolvido (preferência do jogador ou do sistema). */
   reducedMotion: boolean;
+  /** Preferências do servidor já carregadas (ou indisponíveis). */
+  ready: boolean;
 }
-const Ctx = createContext<PrefsApi>({ prefs: DEFAULT_PREFERENCES, setPrefs: () => {}, reducedMotion: false });
+const Ctx = createContext<PrefsApi>({ prefs: DEFAULT_PREFERENCES, setPrefs: () => {}, reducedMotion: false, ready: true });
 export const usePrefs = () => useContext(Ctx);
 
 /**
@@ -34,9 +36,11 @@ export function PrefsProvider({ token, children }: { token?: string; children: R
   const pending = useRef<Partial<Preferences>>({});
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const systemReduced = useMediaQuery('(prefers-reduced-motion: reduce)');
+  const [ready, setReady] = useState(!token);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) { setReady(true); return; }
+    setReady(false);
     getPreferences(token).then((server) => {
       const local = loadLocalPrefs();
       const serverIsDefault = JSON.stringify(server) === JSON.stringify(DEFAULT_PREFERENCES);
@@ -47,7 +51,7 @@ export function PrefsProvider({ token, children }: { token?: string; children: R
       }
       setState(server);
       saveLocalPrefs(server);
-    }).catch(() => { /* offline: mantém o cache local */ });
+    }).catch(() => { /* offline: mantém o cache local */ }).finally(() => setReady(true));
   }, [token]);
 
   const setPrefs = useCallback((patch: Partial<Preferences>) => {
@@ -63,6 +67,6 @@ export function PrefsProvider({ token, children }: { token?: string; children: R
   }, [token]);
 
   const reducedMotion = prefs.reducedMotion === 'on' || (prefs.reducedMotion === 'system' && systemReduced);
-  const value = useMemo(() => ({ prefs, setPrefs, reducedMotion }), [prefs, setPrefs, reducedMotion]);
+  const value = useMemo(() => ({ prefs, setPrefs, reducedMotion, ready }), [prefs, setPrefs, reducedMotion, ready]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

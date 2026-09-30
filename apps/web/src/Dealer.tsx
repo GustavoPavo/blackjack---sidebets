@@ -6,7 +6,7 @@ export function Dealer() {
   const { table, pres, fly } = useGame();
   const d = table.dealer;
   return (
-    <section className="dealer" aria-label="Dealer">
+    <section className={`dealer ${d.cards.length === 0 ? 'empty' : ''}`} aria-label="Dealer">
       <div className="dealer-head">
         <h2>Dealer</h2>
         <div id="shoe" className="shoe" title={`Shoe: ${table.shoeRemaining} cartas`}>

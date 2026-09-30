@@ -57,12 +57,19 @@ const okOrThrow = ({ status, data }: { status: number; data: any }) => {
 export async function createGuest(name: string): Promise<{ token: string; playerId: string; table: TableView }> {
   return okOrThrow(await request('POST', '/api/guest', { body: { name }, retry: false }));
 }
-export async function getTable(token?: string): Promise<TableView> {
-  return okOrThrow(await request('GET', '/api/table', { token }));
+/** Mesa real ou sessão separada de treino/tutorial (`mode`), que nunca toca a carteira real. */
+export type PlayMode = 'real' | 'training' | 'demo';
+const modeQuery = (mode: PlayMode) => (mode === 'real' ? '' : `?mode=${mode}`);
+
+export async function getTable(token?: string, mode: PlayMode = 'real'): Promise<TableView> {
+  return okOrThrow(await request('GET', `/api/table${modeQuery(mode)}`, { token }));
+}
+export async function startSandbox(token: string, kind: 'training' | 'demo'): Promise<TableView> {
+  return okOrThrow(await request('POST', `/api/sandbox/${kind}/start`, { token, retry: false }));
 }
 /** O cliente só envia intenções. Cartas, saldos e pagamentos vêm sempre do servidor. */
-export async function send(token: string, intent: Intent, id: string = newId()): Promise<{ result: CommandResult; table: TableView }> {
-  const { data } = await request('POST', '/api/commands', { token, body: { command: { id, ...intent } } });
+export async function send(token: string, intent: Intent, id: string = newId(), mode: PlayMode = 'real'): Promise<{ result: CommandResult; table: TableView }> {
+  const { data } = await request('POST', `/api/commands${modeQuery(mode)}`, { token, body: { command: { id, ...intent } } });
   return data;
 }
 export async function getPreferences(token: string): Promise<Preferences> { return okOrThrow(await request('GET', '/api/preferences', { token })); }

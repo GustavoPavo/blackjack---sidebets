@@ -2,6 +2,7 @@ import type { Card } from './cards';
 import { handValue, type HandValue } from './hand';
 import type { Cents } from './money';
 import { roundMessage, type RoundMessage } from './roundMessage';
+import { STRATEGY_DISCLAIMER, recommend, recommendInsurance, splitsLeft, type Recommendation } from './strategy';
 import { Table } from './table';
 import {
   RULES, seatNumber, type Action, type BetKind, type BetResult, type HandStatus, type InsuranceDecision,
@@ -59,8 +60,24 @@ export interface PlayerRoundSummary {
   seats: { seat: number; number: number; net: Cents; items: RoundSummaryItem[] }[];
 }
 
+export type ViewKind = 'real' | 'training' | 'demo';
+
+/** Sugestão de estratégia básica para a mão ativa (somente em treino/tutorial). `action` null = sem recomendação. */
+export interface Hint {
+  action: Recommendation['action'];
+  forced: boolean;
+  explanation: string;
+  evs: Recommendation['evs'];
+  disclaimer: string;
+}
+export interface InsuranceHint { action: 'decline'; explanation: string; disclaimer: string }
+
 export interface TableView {
   mode: 'local-simulation';
+  /** Mesa real (carteira e estatísticas reais) ou sandbox de treino/tutorial (créditos de treino, separados). */
+  kind: ViewKind;
+  hint: Hint | null;
+  insuranceHint: InsuranceHint | null;
   phase: Phase;
   round: number;
   shoeRemaining: number;
@@ -93,7 +110,9 @@ export function buildRoundSummary(t: Table): PlayerRoundSummary[] {
 }
 
 /** Estado seguro para o cliente: esconde a carta fechada e o shoe, e traz o que a UI pode fazer. */
-export function toView(t: Table, viewerId?: string): TableView {
+export interface ViewOptions { kind?: ViewKind; hints?: boolean }
+
+export function toView(t: Table, viewerId?: string, opts: ViewOptions = {}): TableView {
   const betting = t.phase === 'BETTING';
   const turn = t.currentTurn();
   const d = t.dealer;
@@ -102,8 +121,24 @@ export function toView(t: Table, viewerId?: string): TableView {
   const viewer = viewerId ? t.players.get(viewerId) : undefined;
   const mySeats = viewer ? t.seatsOf(viewer.id) : [];
   const walletReady = !!viewer && viewer.ledger.length > 0;
+  let hint: Hint | null = null;
+  let insuranceHint: InsuranceHint | null = null;
+  if (opts.hints && turn && d.cards[0]) {
+    const r = recommend({
+      cards: turn.hand.cards, dealerUp: d.cards[0], legal: t.legalFor(turn.seat, turn.hand),
+      splitsLeft: splitsLeft(turn.seat.splits), fromSplit: turn.hand.fromSplit, fromAces: turn.hand.fromAces,
+    });
+    hint = { action: r.action, forced: r.forced, explanation: r.explanation, evs: r.evs, disclaimer: STRATEGY_DISCLAIMER };
+  }
+  if (opts.hints && t.phase === 'INSURANCE') {
+    const i = recommendInsurance();
+    insuranceHint = { action: i.action, explanation: i.explanation, disclaimer: STRATEGY_DISCLAIMER };
+  }
   return {
     mode: 'local-simulation',
+    kind: opts.kind ?? 'real',
+    hint,
+    insuranceHint,
     phase: t.phase,
     round: t.round,
     shoeRemaining: t.shoe?.remaining ?? 0,

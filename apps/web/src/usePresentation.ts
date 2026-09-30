@@ -13,7 +13,8 @@ export function timingFor(speed: 'normal' | 'fast', reduced: boolean): Timing {
   return reduced ? { firstMs: Math.min(t.firstMs, 80), stepMs: Math.min(t.stepMs, 140), holdMs: Math.min(t.holdMs, 250) } : t;
 }
 
-export interface Presentation extends RevealState { presenting: boolean }
+/** `init`: o estado inicial do servidor já foi absorvido (antes disso a mesa é exibida como veio, sem animar). */
+export interface Presentation extends RevealState { presenting: boolean; init: boolean }
 export interface PresentationApi extends Presentation {
   /** Mostra tudo de uma vez (ex.: ao voltar do segundo plano), sem animar. */
   snap: (view: TableView) => void;
@@ -25,7 +26,7 @@ export interface PresentationApi extends Presentation {
  * O servidor decide tudo; aqui só se escolhe QUANDO mostrar cada carta, pela ordem de saque (`seq`).
  */
 export function usePresentation(view: TableView | null, timing: Timing = ANIMATION, onStep?: (s: RevealStep) => void): PresentationApi {
-  const [pres, setPres] = useState<Presentation>({ shownSeq: 0, holeUp: false, presenting: false });
+  const [pres, setPres] = useState<Presentation>({ shownSeq: Infinity, holeUp: true, presenting: false, init: false });
   const ref = useRef(pres);
   const started = useRef(false);
   const timingRef = useRef(timing);
@@ -38,14 +39,14 @@ export function usePresentation(view: TableView | null, timing: Timing = ANIMATI
     if (!view) return;
     if (!started.current) {
       started.current = true; // primeira carga: mostra o estado atual sem animar
-      set({ shownSeq: maxSeq(view), holeUp: view.dealer.cards.length > 1 && view.dealer.cards[1] !== null, presenting: false });
+      set({ shownSeq: maxSeq(view), holeUp: view.dealer.cards.length > 1 && view.dealer.cards[1] !== null, presenting: false, init: true });
       return;
     }
     const base = ref.current;
     const state: RevealState = view.dealer.cards.length === 0 ? { shownSeq: base.shownSeq, holeUp: false } : base;
     const steps = planReveal(view, state);
-    if (steps.length === 0) { set({ ...state, presenting: false }); return; }
-    set({ ...state, presenting: true });
+    if (steps.length === 0) { set({ ...base, ...state, presenting: false }); return; }
+    set({ ...base, ...state, presenting: true });
     const timers: ReturnType<typeof setTimeout>[] = [];
     let i = 0;
     const run = () => {
@@ -61,12 +62,12 @@ export function usePresentation(view: TableView | null, timing: Timing = ANIMATI
   }, [view]);
 
   const snap = useCallback((v: TableView) => {
-    ref.current = { shownSeq: maxSeq(v), holeUp: v.dealer.cards.length > 1 && v.dealer.cards[1] !== null, presenting: false };
+    ref.current = { shownSeq: maxSeq(v), holeUp: v.dealer.cards.length > 1 && v.dealer.cards[1] !== null, presenting: false, init: true };
     setPres(ref.current);
   }, []);
 
   // Derivado no próprio render: no instante em que chega um estado novo (antes do efeito rodar) já há cartas
   // por mostrar, então saldo, resultados e mensagem final não podem vazar.
-  const pending = view !== null && started.current && view.dealer.cards.length > 0 && planReveal(view, pres).length > 0;
+  const pending = view !== null && pres.init && view.dealer.cards.length > 0 && planReveal(view, pres).length > 0;
   return { ...pres, presenting: pres.presenting || pending, snap };
 }

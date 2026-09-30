@@ -21,6 +21,7 @@ const saved = () => JSON.parse(localStorage.getItem('bj.identity.v2') ?? 'null')
 function loginAs(id: string, name: string, buyIn = 0) {
   const token = fake.addPlayer(id, name, buyIn);
   localStorage.setItem('bj.identity.v2', JSON.stringify({ id, name, token }));
+  if (!localStorage.getItem('bj.prefs.v1')) localStorage.setItem('bj.prefs.v1', JSON.stringify({ tutorialSeen: true }));
 }
 
 const seat = (k: number) => screen.getByRole('region', { name: `Lugar ${k}` });

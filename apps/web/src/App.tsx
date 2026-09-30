@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { createGuest } from './api';
+import { createGuest, type PlayMode } from './api';
 import { loadIdentity, saveIdentity, type Identity } from './identity';
 import { NameForm } from './NameForm';
 import { PrefsProvider } from './prefs';
@@ -9,6 +9,7 @@ import { TableScreen } from './TableScreen';
 export function App() {
   const [identity, setIdentity] = useState<Identity | null>(() => loadIdentity());
   const [error, setError] = useState('');
+  const [mode, setMode] = useState<PlayMode>('real');
 
   const update = useCallback((next: Identity | null) => { saveIdentity(next); setIdentity(next); }, []);
 
@@ -16,10 +17,13 @@ export function App() {
     <PrefsProvider token={identity?.token}>
       {identity?.token ? (
         <TableScreen
+          key={mode}
+          mode={mode}
+          onMode={setMode}
           token={identity.token}
           name={identity.name}
           onIdentity={(id) => update({ ...id, token: identity.token })}
-          onSessionLost={() => update({ name: identity.name })}
+          onSessionLost={() => { setMode('real'); update({ name: identity.name }); }}
         />
       ) : (
         <main className="app gate">

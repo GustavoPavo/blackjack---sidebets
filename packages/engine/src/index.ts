@@ -9,3 +9,5 @@ export * from './roundMessage';
 export * from './table';
 export * from './view';
 export * from './dto';
+export * from './strategy';
+export * from './tutorialShoe';

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { RateLimiter } from './auth';
 import type { ServerConfig } from './config';
 import { GameService, ServiceError } from './gameService';
+import { SandboxService, isSandboxKind, type SandboxKind } from './sandbox';
 
 declare module 'express-serve-static-core' {
   interface Request { playerId?: string; token?: string }
@@ -12,6 +13,7 @@ declare module 'express-serve-static-core' {
 
 export interface AppDeps {
   service: GameService;
+  sandbox?: SandboxService;
   config: Pick<ServerConfig, 'allowedOrigins' | 'devTools'>;
 }
 
@@ -24,7 +26,7 @@ const bearer = (req: Request) => {
  * API HTTP. Autenticação: sessão de convidado (token secreto no cabeçalho Authorization). O `playerId`
  * é SEMPRE derivado do token; um identificador público enviado pelo cliente nunca dá acesso a uma carteira.
  */
-export function createApp({ service, config }: AppDeps) {
+export function createApp({ service, config, sandbox = new SandboxService() }: AppDeps) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -65,12 +67,39 @@ export function createApp({ service, config }: AppDeps) {
 
   app.post('/api/session/logout', auth(true), (req, res) => { service.logout(req.token!); res.sendStatus(204); });
 
+  /** `?mode=training|demo` → sessão separada de treino/tutorial (exige sessão; não toca a carteira real). */
+  const modeOf = (req: Request, res: Response): SandboxKind | null | 'invalid' => {
+    const m = req.query.mode;
+    if (m === undefined || m === 'real') return null;
+    if (isSandboxKind(m)) {
+      if (!req.playerId) { res.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'Entre como convidado.' } }); return 'invalid'; }
+      return m;
+    }
+    res.status(400).json({ error: { code: 'INVALID_MODE', message: 'Modo inválido.' } });
+    return 'invalid';
+  };
+
   /** Visão pública da mesa; com sessão, inclui a carteira e os lugares do jogador. */
-  app.get('/api/table', auth(false), (req, res) => res.json(service.view(req.playerId)));
+  app.get('/api/table', auth(false), (req, res) => {
+    const mode = modeOf(req, res);
+    if (mode === 'invalid') return;
+    if (mode) return res.json(sandbox.view(req.playerId!, service.playerName(req.playerId!) ?? 'Jogador', mode));
+    res.json(service.view(req.playerId));
+  });
 
   app.post('/api/commands', auth(true), (req, res) => {
-    const { result, view } = service.execute(req.playerId!, req.body?.command);
+    const mode = modeOf(req, res);
+    if (mode === 'invalid') return;
+    const { result, view } = mode
+      ? sandbox.execute(req.playerId!, service.playerName(req.playerId!) ?? 'Jogador', mode, req.body?.command)
+      : service.execute(req.playerId!, req.body?.command);
     res.status(result.ok ? 200 : 422).json({ result, table: view });
+  });
+
+  /** Reinicia a sessão de treino ou de demonstração do jogador. */
+  app.post('/api/sandbox/:kind/start', auth(true), (req, res) => {
+    if (!isSandboxKind(req.params.kind)) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Modo inexistente.' } });
+    res.json(sandbox.start(req.playerId!, service.playerName(req.playerId!) ?? 'Jogador', req.params.kind));
   });
 
   app.get('/api/preferences', auth(true), (req, res) => res.json(service.getPreferences(req.playerId!)));

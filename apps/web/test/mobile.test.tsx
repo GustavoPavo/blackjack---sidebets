@@ -31,6 +31,7 @@ function start(shoe?: string[]) {
 function loginAs(id: string, name: string, buyIn = 0) {
   const token = fake.addPlayer(id, name, buyIn);
   localStorage.setItem('bj.identity.v2', JSON.stringify({ id, name, token }));
+  if (!localStorage.getItem('bj.prefs.v1')) localStorage.setItem('bj.prefs.v1', JSON.stringify({ tutorialSeen: true }));
 }
 const srv = (c: Record<string, unknown>) => fake.srv(c);
 
@@ -211,7 +212,7 @@ describe('preferências', () => {
     mockMedia(MEDIA.none); start(['10S', '10D', '9H', '8C']); seated(1);
     srv({ type: 'setBet', playerId: 'ana', seat: 0, kind: 'main', amount: 500 });
     srv({ type: 'confirmBets', playerId: 'ana', seat: 0 });
-    localStorage.setItem('bj.prefs.v1', JSON.stringify({ reducedMotion: 'on' }));
+    localStorage.setItem('bj.prefs.v1', JSON.stringify({ tutorialSeen: true, reducedMotion: 'on' }));
     const user = userEvent.setup();
     const { container } = render(<App />);
     await user.click(await screen.findByText('Distribuir'));
@@ -244,7 +245,7 @@ describe('som e vibração', () => {
 
   it('com som e vibração desligados, nada toca nem vibra', async () => {
     mockMedia(MEDIA.none); start(['10S', '10D', '9H', '8C']); seated(1);
-    localStorage.setItem('bj.prefs.v1', JSON.stringify({ sound: false, vibration: false }));
+    localStorage.setItem('bj.prefs.v1', JSON.stringify({ tutorialSeen: true, sound: false, vibration: false }));
     const vib = vi.fn();
     vi.stubGlobal('navigator', { ...navigator, vibrate: vib });
     const user = userEvent.setup();

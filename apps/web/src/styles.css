@@ -160,6 +160,7 @@ input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; min-hei
 .sheet-backdrop { position: fixed; z-index: 50; inset: 0; background: #001811d9; display: grid; place-items: center; padding: 14px; }
 .sheet-backdrop.left { place-items: stretch start; padding: 0; }
 .sheet { background: #102c26; border: 1px solid var(--gold); border-radius: 18px; width: min(440px, 100%); max-height: 88vh; max-height: 88dvh; overflow: auto; padding: 16px; box-shadow: 0 25px 90px #000b; }
+.sheet.wide { width: min(620px, 100%); }
 .sheet.left { width: min(92vw, 380px); max-height: none; height: 100%; border-radius: 0 18px 18px 0; padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b)) calc(16px + var(--safe-l)); }
 .sheet > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .sheet h2 { font: 500 1.4rem Georgia, serif; }
@@ -195,7 +196,10 @@ input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; min-hei
 .layout-focus .table-rim { min-height: 0; padding: 12px 10px 14px; border-radius: 20px; }
 .layout-focus .table-rim::before { inset: 8px; }
 .layout-focus .dealer { --cw: 46px; padding: 6px; margin: 0 0 8px; min-height: 0; }
-.layout-focus .phase-line { margin: 10px 0 4px; }
+.layout-focus .phase-line { display: none; }
+.layout-focus .dealer.empty { min-height: 0; padding: 4px 6px; margin-bottom: 6px; } .layout-focus .dealer.empty .cards { min-height: 0; margin: 0; }
+.layout-focus .dealer .cards { min-height: calc(var(--cw) * 1.4); margin: 4px 0; }
+.tut .seatstrip { display: none; }
 .seatstrip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 10px; }
 .seatstrip .tab { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 56px; padding: 4px 2px; background: #ffffff10; color: var(--text); border: 1px solid #d5b27555; border-radius: 12px; }
 .seatstrip .tab b { font-size: 1.05rem; } .seatstrip .tab small { font-size: .6rem; opacity: .85; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -281,3 +285,62 @@ input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; min-hei
 @media (prefers-reduced-motion: reduce) { .chip { transition: none; } }
 
 .seat.focus .leave { margin-top: 8px; }
+
+/* ================= Treino, tutorial, dicas, estatísticas, exemplos de regras ================= */
+.sandbox-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: #3a2d0b; border: 1px solid var(--gold); color: #ffe9b0; border-radius: 12px; padding: 6px 12px; margin: 0 0 10px; font-size: .8rem; position: relative; z-index: 31; }
+.layout-focus .sandbox-banner, .layout-compact .sandbox-banner { flex-wrap: nowrap; border-radius: 10px; margin: 0 8px 8px; padding: 4px 10px; font-size: .74rem; }
+.layout-focus .sandbox-banner .long, .layout-compact .sandbox-banner .long { display: none; }
+.layout-compact .sandbox-banner { font-size: .66rem; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px; }
+.hint { width: min(100%, 560px); text-align: left; background: #0b3a2e; border: 1px solid #8fd1ac; border-radius: 12px; padding: 6px 12px; font-size: .85rem; }
+.hint summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; gap: 6px; color: #c8f3da; }
+.hint.none { border-color: #c9b58a; } .hint.none summary { color: #f3e5bf; }
+.hint p { margin: 4px 0; line-height: 1.4; } .hint small { color: #b9cfc2; display: block; margin: 4px 0; }
+.act.suggested { box-shadow: 0 0 0 3px #8fd1ac, 0 0 14px 2px #8fd1ac99; }
+.layout-focus .coach { margin: 0 8px 8px; width: auto; padding: 8px 12px; } .layout-focus .coach p { font-size: .8rem; margin-bottom: 4px; } .layout-focus .coach h3 { font-size: .95rem; }
+.coach { width: min(100%, 560px); margin: 10px auto; text-align: left; background: #12324a; border: 2px solid #79b8ff; border-radius: 14px; padding: 10px 14px; }
+.coach .coach-step { font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: #a9d2ff; font-weight: 800; }
+.coach h3 { font: 600 1.05rem Georgia, serif; margin: 2px 0 4px; } .coach p { margin: 0 0 6px; line-height: 1.45; font-size: .88rem; }
+.coach.floating { position: fixed; z-index: 36; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + var(--safe-b) + 10px); width: min(94vw, 520px); max-height: 40vh; max-height: 40dvh; overflow: auto; margin: 0; }
+.layout-compact .coach.floating { max-height: 52dvh; font-size: .8rem; } .layout-compact .coach p { font-size: .78rem; margin-bottom: 4px; }
+/* realce do alvo de cada passo do tutorial */
+.tut-chip .chips, .tut-main .seat.mine .bet.main .betbtn, .tut-side .seat.mine .bet:not(.main) .betbtn:not(:disabled), .tut-confirm .btn-confirm, .tut-deal .deal:not(:disabled), .tut-decide .act {
+  box-shadow: 0 0 0 3px #79b8ff, 0 0 18px 4px #79b8ff88; border-radius: 12px; animation: tutPulse 1.4s ease-in-out infinite; }
+.tut-chip .chips { padding: 6px 10px; }
+@keyframes tutPulse { 50% { box-shadow: 0 0 0 5px #79b8ff, 0 0 26px 8px #79b8ffaa; } }
+.reduce-motion.tut * { animation: none; }
+
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 0 0 10px; }
+.stat-tiles > div { background: #ffffff10; border: 1px solid #ffffff22; border-radius: 10px; padding: 8px 10px; }
+.stat-tiles .wide { grid-column: 1 / -1; }
+.stat-tiles dt { font-size: .7rem; color: #cfe0d4; } .stat-tiles dd { margin: 2px 0 0; font-size: 1.15rem; font-weight: 800; }
+.pos { color: var(--ok); } .neg { color: var(--danger); }
+.small-note { font-size: .78rem; line-height: 1.45; }
+.sheet h3 { margin: 14px 0 6px; font-size: 1rem; color: var(--gold); }
+.table-scroll { overflow-x: auto; }
+.stat-table { border-collapse: collapse; width: 100%; font-size: .78rem; min-width: 420px; }
+.stat-table th, .stat-table td { padding: 6px 5px; text-align: right; border-bottom: 1px solid #ffffff1a; white-space: nowrap; }
+.stat-table thead th, .stat-table tbody th { text-align: left; font-weight: 700; }
+.history { list-style: none; padding: 0; margin: 0; }
+.history summary { display: flex; justify-content: space-between; gap: 8px; }
+.hist-seat h4 { margin: 8px 0 2px; display: flex; justify-content: space-between; font-size: .9rem; }
+.hist-hand { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.hist-results { margin: 4px 0 8px; padding-left: 18px; font-size: .78rem; }
+.mini-cards { --cw: 26px; display: inline-flex; gap: 3px; flex-wrap: wrap; } .mini-cards .card { box-shadow: 0 1px 2px #0008; }
+.hist-dealer { display: flex; align-items: center; gap: 8px; }
+
+.profit-note { background: #e4bd7422; border-left: 4px solid var(--gold); padding: 8px 12px; border-radius: 0 8px 8px 0; }
+.examples { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 10px; }
+.examples li { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+.examples li.invalid { opacity: .75; }
+.ex-cards { --cw: 30px; display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.ex-card { display: flex; flex-direction: column; align-items: center; gap: 2px; } .ex-card small { font-size: .55rem; color: #cfe0d4; }
+.ex-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 100px; }
+.ex-text small { font-size: .72rem; color: #c6d5c8; line-height: 1.3; }
+.ratio { font-style: normal; font-weight: 800; color: var(--gold); margin-left: 6px; }
+.examples.ace { margin-top: 6px; border-top: 1px dashed #ffffff33; padding-top: 8px; }
+.mini-back { display: inline-block; width: 14px; height: 20px; border-radius: 3px; border: 1px solid #fff; background: repeating-linear-gradient(45deg, #7a1f2b, #7a1f2b 3px, #9b2c3a 3px, #9b2c3a 6px); }
+.ex-cards.mini { gap: 2px; width: 92px; flex-wrap: wrap; }
+.insurance-row { display: flex; align-items: center; gap: 8px; }
+
+.coach-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; } .coach-head h3 { margin: 0 0 2px; }
+.layout-focus .chip { --s: 52px; } .layout-focus .actionbar .chips { padding-top: 8px; padding-bottom: 6px; margin: 2px 0 4px; }
